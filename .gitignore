@@ -29,7 +29,8 @@ Components/AI/int8_precision_hw_results.csv
 # ===== 部分程序参考文档（无需主要为操作手册 借鉴别人的为主）=====
 Doc/W25Q64/
 Doc/TT带编码电机/
-
+.workbuddy
+.gitignore
 # ===== github上传指南是给我看的 =====
 Doc/GitHub上传指南.md
 
