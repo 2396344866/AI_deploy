@@ -27,16 +27,7 @@ MDK-ARM/          Keil 工程（BSP/Logger/Motor/AI 分组）
 - 双电机闭环：TIM1 10kHz PWM / TIM3-4 编码器 / TIM7 1ms 环 / 增量 PI + 位置级联
 
 ## 模型与推理（代码事实）
-- 结构：input10 → H0(50) → Z_final(150) → 4 类；FC1 5000MAC / FC2 600MAC
-- 权重 7700 floats ≈ 30.1KB @ .dtcmram（零等待、CPU 专用）
-- 加速：gamma LUT 替 powf / 预计算 inv_sigma / CMSIS-DSP f32 算子
-- 精度（PC 预校验, 1605 样本, 对齐 PyTorch 94.70%）：
-  `f32 94.70% | HYBRID 90.97% | FC1f32+FC2i8 91.59% | FC1i8+FC2i8 90.03% | FULL_INT8 88.72%`
-  （硬件实测见 Deployment_Guide；StartInferenceTask 打印实际 acc）
-- 当前 DIT2 模型：γ=0.7, p=±0.3, H0 absmax±1.83（无范围失配，FC2 int8 可行）
-- 未实现：per-channel 量化 / Flash 45% 压缩
-
-## 注意
-- 自定义代码放 Components/，勿放 Core/（防 CubeMX 重生覆盖）
-- 重生后检查 Keil Components 组是否被清
-- 勿改时钟树（SPI 锁 160MHz）
+- 结构：input10 → H0(50) → Z_final(150) → 4 类；
+- 权重 7700 floats ≈ 30.1KB 
+- 加速：gamma LUT 替 powf / 预计算 inv_sigma / CMSIS-DSP
+- 精度（PC 预校验, 1605 样本, 对齐 PyTorch 94.70%  FC1f32+FC2i8 91.59% FULL_INT8 88.72%）：
