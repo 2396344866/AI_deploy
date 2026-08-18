@@ -1,0 +1,38 @@
+/*
+ * model_weights_ext.h
+ * ---------------------------------------------------------------------------
+ * DIV2IFSCN 浮点权重的「外部声明」头。
+ *
+ * 背景：Components/AI/Inc/model_weights.h 以「外部链接 const」方式**定义**
+ *       了全部权重（c_centers / sigma_* / W_hid_in / beta ...），并被
+ *       freertos.c 单独包含编译（定义落在 freertos.c 这一翻译单元）。
+ *       若在本模块的多个 .c 中再次 #include "model_weights.h"，会触发
+ *       「多重定义」链接错误。因此这里只声明 extern，供 fuzzy_frontend.c
+ *       与 ai_infer.c 引用 freertos.c 单元里已定义的浮点权重，避免重复
+ *       存储与链接冲突。
+ *
+ * 注意：model_weights.h 必须恰好被一个翻译单元包含（当前为 freertos.c），
+ *       否则定义缺失/重复。本头不得被改为定义。
+ * ---------------------------------------------------------------------------
+ */
+#ifndef MODEL_WEIGHTS_EXT_H
+#define MODEL_WEIGHTS_EXT_H
+
+#include <stdint.h>
+
+extern const float     ivifs_gamma;
+extern const uint32_t  num_fuzzy_rules;
+extern const uint32_t  l_internal;
+extern const uint32_t  input_dim;
+extern const uint32_t  output_dim;
+
+extern const float     c_centers[500];
+extern const float     sigma_upper[500];
+extern const float     sigma_lower[500];
+extern const float     p_consequent_factors[500];
+
+extern const float     W_hid_in[5000];
+extern const float     b_hid[100];
+extern const float     beta[600];
+
+#endif /* MODEL_WEIGHTS_EXT_H */

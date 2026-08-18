@@ -1,0 +1,16 @@
+#ifndef TEST_DATASET_H
+#define TEST_DATASET_H
+/* 占位桩（公开仓库用，不含真实测试数据 —— 数据为私有，禁止上传）。
+ *
+ * 用法（编译前，在本地执行）：
+ *   cp Components/AI/Inc/test_dataset_processed.h.example Components/AI/Inc/test_dataset_processed.h
+ * 并填入你的私有测试集。
+ *
+ * 本桩仅 1 条占位样本，自检任务会运行但精度统计无意义。
+ */
+#define NUM_TEST_SAMPLES 1
+#define NUM_FEATURES 10
+
+const float test_features_processed[NUM_TEST_SAMPLES][NUM_FEATURES] = {{0}};
+const int   test_labels[NUM_TEST_SAMPLES] = {0};
+#endif /* TEST_DATASET_H */
