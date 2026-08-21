@@ -7,6 +7,7 @@ Components/AI/Inc/model_weights_ext.h
 Components/AI/Inc/model_weights_q.h
 Components/AI/Inc/*.bak
 Components/AI/Inc/*.bak_*
+Components/AI/Inc/backup
 
 # ===== 构建产物（无需公开 自己编译生成即可）=====
 *.o
@@ -31,6 +32,7 @@ Doc/W25Q64/
 Doc/TT带编码电机/
 .workbuddy/
 .gitignore
+
 # ===== github上传指南是给我看的 =====
 Doc/GitHub上传指南.md
 
@@ -62,3 +64,17 @@ Components/HardFaultLab/
 
 # ===== AI编程提示词（用户或者AI查看 无需公开）=====
 基于RTOS架构-AI编程提示词.md
+
+# ===== 本地备份 / 调试产物（无需公开）=====
+Components/AI/backup/
+Components/Debug/
+
+# ===== 由 md 生成的 HTML 文档（非源，可重新生成）=====
+Doc/**/*.html
+
+# ===== 编辑器 / 操作系统（兜底，避免误提交）=====
+.vscode/
+.idea/
+.DS_Store
+*.bak
+*.bak_*
