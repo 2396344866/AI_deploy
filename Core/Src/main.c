@@ -22,6 +22,7 @@
 #include "FreeRTOS.h"
 #include "cmsis_os2.h"
 #include "dma.h"
+#include "i2c.h"
 #include "spi.h"
 #include "tim.h"
 #include "usart.h"
@@ -32,6 +33,8 @@
 #include "BSP_GPIO.h"
 #include "BSP_USART.h"
 #include "motor.h"
+#include "attitude.h"       // 姿态解算 + 外环（Components/BSP/IMU）
+#include "dbg_telemetry.h"  // 调试遥测（Components/Debug，UART1 firewater）
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -114,14 +117,21 @@ int main(void)
   MX_TIM3_Init();
   MX_TIM4_Init();
   MX_TIM7_Init();
+  MX_I2C1_Init();
   /* USER CODE BEGIN 2 */
-	// 1. ���� DMA ���գ�Circular ģʽ��
+	// 1. DMA Circular
 	HAL_UART_Receive_DMA(&huart4, rx_buf, RX4_BUFFER_SIZE);
 
-	// 2. ���������ж� (��һ�б����У����򲻻ᴥ�� IDLE �ж�)
+	// 2. IDLE
 	__HAL_UART_ENABLE_IT(&huart4, UART_IT_IDLE);
+	Dbg_Telemetry_Init();   /* 调试遥测：UART1 DMA 接收启动前用 DBG_UART_BAUD 重设波特率 */
 	BSP_UART1_RxStart();
 	Motor_App_Init();        /* 启动 TIM1 PWM / TIM3-4 编码器 / TIM7 1ms 控制环 */
+	if (Attitude_Init() != 0) { 
+		printf("WARN: Attitude/MPU6050 Init FAILED!\r\n");
+	} else { 
+	printf("MPU6050 Init OK\r\n"); 
+	}         /* 初始化 MPU6050 + 姿态库（I2C1 已由 CubeMX 生成并初始化） */
 	printf("System Init Success!\r\n");
 
   /* USER CODE END 2 */

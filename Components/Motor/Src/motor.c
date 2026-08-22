@@ -16,8 +16,8 @@ static Motor_t g_motor[MOTOR_B + 1] = {
         .id = MOTOR_A,
         .htim_pwm = &htim1, .pwm_ch = TIM_CHANNEL_1,
         .htim_enc = &htim4,
-        .ain1_port = AIN1_GPIO_Port, .ain1_pin = AIN1_Pin,
-        .ain2_port = AIN2_GPIO_Port, .ain2_pin = AIN2_Pin,
+        .ain1_port = TB6612_AIN1_GPIO_Port, .ain1_pin = TB6612_AIN1_Pin,
+        .ain2_port = TB6612_AIN2_GPIO_Port, .ain2_pin = TB6612_AIN2_Pin,
         .enc_sign = 1,
         .cmd_dir  = 1,
     },
@@ -26,8 +26,8 @@ static Motor_t g_motor[MOTOR_B + 1] = {
         .id = MOTOR_B,
         .htim_pwm = &htim1, .pwm_ch = TIM_CHANNEL_2,
         .htim_enc = &htim3,
-        .ain1_port = BIN1_GPIO_Port, .ain1_pin = BIN1_Pin,
-        .ain2_port = BIN2_GPIO_Port, .ain2_pin = BIN2_Pin,
+        .ain1_port = TB6612_BIN1_GPIO_Port, .ain1_pin = TB6612_BIN1_Pin,
+        .ain2_port = TB6612_BIN2_GPIO_Port, .ain2_pin = TB6612_BIN2_Pin,
         .enc_sign = 1,
         .cmd_dir  = -1,
     },
@@ -286,6 +286,12 @@ int32_t Motor_GetPWM(MotorID id)
 {
     if (id > MOTOR_B) return 0;
     return g_motor[id].pwm_out;
+}
+
+int32_t Motor_GetTargetSpeed(MotorID id)
+{
+    if (id > MOTOR_B) return 0;
+    return g_motor[id].target_speed;
 }
 
 /* -----------------------------------------------------------------------------

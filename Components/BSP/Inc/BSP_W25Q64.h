@@ -1,5 +1,5 @@
-#ifndef _BSP_W24Q64_H
-#define _BSP_W24Q64_H
+#ifndef _BSP_W25Q64_H
+#define _BSP_W25Q64_H
 
 #include <string.h>
 #include <stdlib.h>

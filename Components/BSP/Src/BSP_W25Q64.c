@@ -16,7 +16,7 @@ static void Flash_InvalidateRxBuf(uint32_t len){
 }
 
 
-extern  osSemaphoreId_t g_FlashDmaDoneHandle;
+extern  osSemaphoreId_t g_semFlashDmaDoneHandle;
 
 uint8_t W25QXX_ReadWriteByte(uint8_t TxData){
     uint8_t RxData = 0;
@@ -168,7 +168,7 @@ void W25QXX_PageWrite(uint8_t* pTxBuffer, uint32_t WriteAddr, uint16_t NumByteTo
 		}
 				
     // 等待DMA完成（阻塞等待信号量）
-    osSemaphoreAcquire(g_FlashDmaDoneHandle, osWaitForever);  // 一直等到回调释放
+    osSemaphoreAcquire(g_semFlashDmaDoneHandle, osWaitForever);  // 一直等到回调释放
 
 		
     // 6. 拉高片选
@@ -208,7 +208,7 @@ void W25QXX_BufferRead(uint8_t* pRxBuffer, uint32_t ReadAddr, uint16_t NumByteTo
         W25QXX_CS_HIGH();          // 异常也要释放 CS
         return;                    // 由上层决定重试/报错
     }
-    osSemaphoreAcquire(g_FlashDmaDoneHandle, osWaitForever);  // 等待 RX 完成（HAL_SPI_RxCpltCallback 释放）
+    osSemaphoreAcquire(g_semFlashDmaDoneHandle, osWaitForever);  // 等待 RX 完成（HAL_SPI_RxCpltCallback 释放）
     memcpy(pRxBuffer, g_flashRxBuf, NumByteToRead);          // 拷回调用方缓冲（调用方缓冲未必 32 对齐/在 AXI SRAM）
     // 5. 拉高片选
 		W25QXX_CS_HIGH();

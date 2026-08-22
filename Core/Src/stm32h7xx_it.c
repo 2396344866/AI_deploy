@@ -25,6 +25,7 @@
 /* USER CODE BEGIN Includes */
 #include "BSP_USART.h" 
 #include "logger.h"    // 日志黑匣子：HardFault 中刷新最近日志到 Flash
+#include "cmsis_os2.h" // 供 ISR 内 osSemaphoreRelease（CMSIS-RTOS V2，ISR 安全）
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -73,6 +74,8 @@ extern TIM_HandleTypeDef htim6;
 /* USER CODE BEGIN EV */
 void BSP_UART1_IdleHandler(void);   /* USART1 DMA+IDLE：由 BSP_USART.c 实现 */
 void Motor_1ms_Handler(void);       /* TIM7 1ms 控制环：由 Components/Motor 实现 */
+extern osSemaphoreId_t g_semAttitudeDataReadyHandle;  /* CubeMX 生成（二值信号量） */
+extern osSemaphoreId_t g_semScreenUpdateHandle;       /* 淘晶驰屏数据到达：ISR 释放，Task_Screen 获取 */
 /* USER CODE END EV */
 
 /******************************************************************************/
@@ -184,6 +187,20 @@ void DebugMon_Handler(void)
 /* For the available peripheral interrupt handler names,                      */
 /* please refer to the startup file (startup_stm32h7xx.s).                    */
 /******************************************************************************/
+
+/**
+  * @brief This function handles EXTI line3 interrupt.
+  */
+void EXTI3_IRQHandler(void)
+{
+  /* USER CODE BEGIN EXTI3_IRQn 0 */
+
+  /* USER CODE END EXTI3_IRQn 0 */
+  HAL_GPIO_EXTI_IRQHandler(MPU6050_INT_Pin);
+  /* USER CODE BEGIN EXTI3_IRQn 1 */
+
+  /* USER CODE END EXTI3_IRQn 1 */
+}
 
 /**
   * @brief This function handles DMA1 stream0 global interrupt.
@@ -299,11 +316,12 @@ void UART4_IRQHandler(void)
       // 2. 停掉接收，准备重置
       HAL_UART_DMAStop(&huart4);
       
-      // 3. 【工业级重点】这里触发处理逻辑
+      // 3. 【工业级重点】ISR 内严禁阻塞式发送！
+      //    原 UART4_Printf(...) 在中断里 HAL_UART_Transmit 轮询，会饿死调度器
+      //    （现象：System Init Success! 后再无任务输出）。改为释放信号量，
+      //    由 Task_Screen 在任务上下文处理 rx_buf。
       if (rx_len > 0) {
-          // 如果你的数据很短，可以在这里直接处理；如果长，请 Release 信号量
-          // Process_Screen_Data(rx_buf, rx_len); 
-          UART4_Printf("Received %d bytes\r\n", rx_len);
+          osSemaphoreRelease(g_semScreenUpdateHandle);
       }
       
       // 4. 重置状态并开启接收
@@ -345,5 +363,15 @@ void TIM7_IRQHandler(void)
 }
 
 /* USER CODE BEGIN 1 */
+
+/* MPU6050 data-ready 中断（INT 脚 -> EXTI，CubeMX 生成 EXTIx_IRQHandler 并调用本回调）。
+   运行于 ISR 上下文：严格只做"Give"动作（释放信号量唤醒 Task_Sensor），
+   不碰任何业务/耗时操作，符合 RTOS 铁律。EXTI 优先级数值已设 ≥5（建议 6）。 */
+void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
+{
+    if (GPIO_Pin == MPU6050_INT_Pin) {
+        osSemaphoreRelease(g_semAttitudeDataReadyHandle);
+    }
+}
 
 /* USER CODE END 1 */

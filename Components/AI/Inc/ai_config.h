@@ -40,10 +40,19 @@
 #define AI_Z_DIM        150  /* Z_final = H0(50) + hidden(100) */
 #define AI_OUTPUT_DIM   4    /* 诊断类别数 */
 
-/* 默认：全 int8（AI_PRECISION_FULL_INT8；PC 预校验 88.72% / 硬件 88.66%）。
-   追求最高精度可改 AI_PRECISION_INT8_HYBRID（PC 90.97% / 硬件 90.90%）。改这里即可切换。 */
+/* 默认：混合1（AI_PRECISION_INT8_HYBRID）。
+   当前 model_weights.h = ivifs_gamma 0.700（DIT2 模型，即 DOC_PRECISION_COMPARISON.md 里
+   测出 88.66%/90.90% 的那份）。经 ML/_diag_accuracy.py 用 1605 测试样本精确复刻（与 C 前向语义一致）：
+     - FLOAT32      : PC 94.70%  (与 DOC oracle 完全一致)
+     - INT8_HYBRID  : PC 91.03%  (C 逻辑/requant 验证正确；上板≈90.90%)
+     - FULL_INT8    : PC 88.79%  (≈ DOC 硬件 88.66%，已达成)
+   ⚠️ 重要：FULL_INT8/HYBRID 的 int8 产物（model_weights_q.h / model_q_params.h / fuzzy_lut.h）
+   必须基于「当前这份 model_weights.h」由 ML/quantize_ptq.py 重新生成。若只换了 model_weights.h
+   （换 gamma / 重训）却没重跑 quantize_ptq.py，float 权重与 int8 权重 + 硬件 H0 查表会三方错配，
+   实测会崩到 ~42%。此前用户碰到的 42% 正是这个原因（0.7 浮点权重 + 0.6 派生的旧 int8 产物）。
+   改下面这一行即可切换精度模式；换权重后务必重跑 quantize_ptq.py。 */
 #ifndef AI_PRECISION
-#define AI_PRECISION  AI_PRECISION_FULL_INT8
+#define AI_PRECISION  AI_PRECISION_INT8_HYBRID
 #endif
 
 /* ===== 由 AI_PRECISION 派生的逐层开关（供 ai_infer.c 使用） ===== */

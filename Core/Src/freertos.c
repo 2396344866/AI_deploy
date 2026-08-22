@@ -36,6 +36,9 @@
 #include "ai_infer.h"
 #include "test_dataset_processed.h"
 #include "hardfault_lab.h"   // HardFault 实验室（仅当 HARDFAULT_LAB 宏开启时调用/链接，模块在 Components/HardFaultLab/）
+#include "attitude.h"        // 姿态解算 + 外环控制器（Components/BSP/IMU）
+#include "imu_mpu6050.h"     // MPU6050 底层 I2C 读取
+#include "dbg_telemetry.h"  // 调试遥测（UART1 firewater，见 Components/Debug）
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -132,20 +135,25 @@ osMutexId_t InferenceDataMutexHandle;
 const osMutexAttr_t InferenceDataMutex_attributes = {
   .name = "InferenceDataMutex"
 };
-/* Definitions for ScreenDataSem */
-osSemaphoreId_t ScreenDataSemHandle;
-const osSemaphoreAttr_t ScreenDataSem_attributes = {
-  .name = "ScreenDataSem"
+/* Definitions for g_semScreenUpdate */
+osSemaphoreId_t g_semScreenUpdateHandle;
+const osSemaphoreAttr_t g_semScreenUpdate_attributes = {
+  .name = "g_semScreenUpdate"
 };
-/* Definitions for InferenceLockedSemHandle */
-osSemaphoreId_t InferenceLockedSemHandleHandle;
-const osSemaphoreAttr_t InferenceLockedSemHandle_attributes = {
-  .name = "InferenceLockedSemHandle"
+/* Definitions for g_semInferenceLock */
+osSemaphoreId_t g_semInferenceLockHandle;
+const osSemaphoreAttr_t g_semInferenceLock_attributes = {
+  .name = "g_semInferenceLock"
 };
-/* Definitions for g_FlashDmaDone */
-osSemaphoreId_t g_FlashDmaDoneHandle;
-const osSemaphoreAttr_t g_FlashDmaDone_attributes = {
-  .name = "g_FlashDmaDone"
+/* Definitions for g_semFlashDmaDone */
+osSemaphoreId_t g_semFlashDmaDoneHandle;
+const osSemaphoreAttr_t g_semFlashDmaDone_attributes = {
+  .name = "g_semFlashDmaDone"
+};
+/* Definitions for g_semAttitudeDataReady */
+osSemaphoreId_t g_semAttitudeDataReadyHandle;
+const osSemaphoreAttr_t g_semAttitudeDataReady_attributes = {
+  .name = "g_semAttitudeDataReady"
 };
 
 /* Private function prototypes -----------------------------------------------*/
@@ -184,18 +192,20 @@ void MX_FREERTOS_Init(void) {
   /* USER CODE END RTOS_MUTEX */
 
   /* Create the semaphores(s) */
-  /* creation of ScreenDataSem */
-  ScreenDataSemHandle = osSemaphoreNew(1, 0, &ScreenDataSem_attributes);
+  /* creation of g_semScreenUpdate */
+  g_semScreenUpdateHandle = osSemaphoreNew(1, 0, &g_semScreenUpdate_attributes);
 
-  /* creation of InferenceLockedSemHandle */
-  InferenceLockedSemHandleHandle = osSemaphoreNew(1, 0, &InferenceLockedSemHandle_attributes);
+  /* creation of g_semInferenceLock */
+  g_semInferenceLockHandle = osSemaphoreNew(1, 0, &g_semInferenceLock_attributes);
 
-  /* creation of g_FlashDmaDone */
-  g_FlashDmaDoneHandle = osSemaphoreNew(1, 0, &g_FlashDmaDone_attributes);
+  /* creation of g_semFlashDmaDone */
+  g_semFlashDmaDoneHandle = osSemaphoreNew(1, 0, &g_semFlashDmaDone_attributes);
+
+  /* creation of g_semAttitudeDataReady */
+  g_semAttitudeDataReadyHandle = osSemaphoreNew(1, 1, &g_semAttitudeDataReady_attributes);
 
   /* USER CODE BEGIN RTOS_SEMAPHORES */
-  /* add semaphores, ... */
-//	InferenceLockedSemHandle = osSemaphoreNew(1, 0, NULL);  // 最大计数1，初始计数0（上锁状态）后面数值表示当前剩余可用的令牌数量
+  /* 所有二值信号量已统一由 CubeMX 生成（g_sem*Handle），此处不再手工创建，避免重复定义 */
   /* USER CODE END RTOS_SEMAPHORES */
 
   /* USER CODE BEGIN RTOS_TIMERS */
@@ -260,8 +270,9 @@ void StartInferenceTask(void *argument)
   // 确保推理函数内部的初始化标志已经重置或能够正常运行
   float dummy_out[4];
   AI_Inference((float*)test_features_processed[0], dummy_out);
+#if DBG_LOG_ENABLE
   LOG_I("INFER", "AI Task Started. Beginning Batch Inference...");
-
+#endif
   int tp[4] = {0}, fp[4] = {0}, fn[4] = {0};
   int correct_total = 0;
   uint32_t start_time = HAL_GetTick(); 
@@ -315,9 +326,11 @@ void StartInferenceTask(void *argument)
   macro_f1 /= 4.0f;
 	float overall_accuracy = (float)correct_total / NUM_TEST_SAMPLES;
   /* 推理结果汇总：分级日志（INFO），由 LoggerTask 异步刷串口 */
+#if DBG_LOG_ENABLE
   LOG_I("INFER", "Summary: samples=%d acc=%.4f prec=%.4f recall=%.4f f1=%.4f total=%.2fms per=%.4fms",
         NUM_TEST_SAMPLES, overall_accuracy, macro_precision, macro_recall, macro_f1,
         total_time_ms, total_time_ms / NUM_TEST_SAMPLES);
+#endif
   /* 写入共享结构，互斥量保护，供 NetworkTask 读取（生产逻辑，必须保留） */
   if (osMutexAcquire(InferenceDataMutexHandle, osWaitForever) == osOK) {
       g_Test_results.num_test_samples = NUM_TEST_SAMPLES;
@@ -351,7 +364,9 @@ void StartMotorTask(void *argument)
      本任务职责：
        1. PC13 按键（低电平）：短按切换 运行/刹车；
        2. 每秒打印一次双电机速度/位置/估算转速（仅供联调，发布版可关）。 */
+#if DBG_LOG_ENABLE
   LOG_I("MOTOR", "Motor task started. Press KEY(PC13) to toggle run/brake.");
+#endif
   uint32_t log_cnt = 9;   /* 首行遥测提前到 ~100ms 后，便于一眼确认任务存活 */
 
   /* 串口命令采用"ISR 入队 + 任务出队"模型（见 BSP_UART1_OnFrame → g_cmd_qHandle）。
@@ -377,11 +392,17 @@ void StartMotorTask(void *argument)
     if (osMessageQueueGet(g_cmd_qHandle, lbuf, NULL, 0U) == osOK) {
         uint16_t n = 0U;
         while (lbuf[n] != '\0' && n < 31U) n++;   /* 计算命令长度（无 string.h 依赖） */
-        Motor_ProcessCommand(lbuf, n);            /* 任务上下文：可安全 LOG / 改电机状态 */
+        if (lbuf[0] == 'T' || lbuf[0] == 'P' || lbuf[0] == 'K' ||
+            lbuf[0] == 'C' || lbuf[0] == 'F' || lbuf[0] == 'D' || lbuf[0] == 'M') {
+            Attitude_ProcessCommand(lbuf, n);      /* 姿态外环命令（T/P/K/C/F/D） */
+        } else {
+            Motor_ProcessCommand(lbuf, n);         /* 电机命令（A/B/S/R） */
+        }
         BSP_UART1_SendPoll((const uint8_t *)lbuf, n);  /* 回显：从 ISR 移到任务，符合范式 */
     }
 
-    /* 3. 每秒打印一次遥测 */
+    /* 3. 每秒打印一次遥测（DBG_LOG_ENABLE=0 时整体关闭，避免干扰 VOFA 波形） */
+#if DBG_LOG_ENABLE
     if (++log_cnt >= 10) {   /* 10 * 100ms = 1s */
         log_cnt = 0;
         LOG_I("MOTOR", "A spd=%ld pwm=%ld rpm=%.1f | B spd=%ld pwm=%ld rpm=%.1f | run=%d mode=%d",
@@ -398,6 +419,7 @@ void StartMotorTask(void *argument)
               HAL_GPIO_ReadPin(GPIOB, GPIO_PIN_6), HAL_GPIO_ReadPin(GPIOB, GPIO_PIN_7),
               HAL_GPIO_ReadPin(GPIOB, GPIO_PIN_4), HAL_GPIO_ReadPin(GPIOB, GPIO_PIN_5));
     }
+#endif
 
     osDelay(100);
   }
@@ -422,10 +444,12 @@ void StartNetworkTask(void *argument)
 					
 
             // 安全读取数据并打印
+						#if DBG_LOG_ENABLE
             LOG_I("NET", "Summary (From Network Task): acc=%.4f prec=%.4f recall=%.4f f1=%.4f total=%.2fms",
                   g_Test_results.overall_accuracy, g_Test_results.macro_precision,
                   g_Test_results.macro_recall, g_Test_results.macro_f1,
                   g_Test_results.total_time_ms);
+						#endif
             
             g_Test_results.data_is_ready = 0; // 打印后重置标志
             osMutexRelease(InferenceDataMutexHandle);
@@ -448,16 +472,31 @@ void StartSensorTask(void *argument)
   /* USER CODE BEGIN StartSensorTask */
 	
 #ifdef HARDFAULT_LAB
-  /* HardFault 实验室（v3.2）：配置四级中断抢占 + MPU 栈守卫带，
+  /* 测试故障诊断用 测试故障诊断用 测试故障诊断用 测试故障诊断用
+		 HardFault 实验室（v3.2）：配置四级中断抢占 + MPU 栈守卫带，
      触发四层中断嵌套级联，使嵌套压栈越过守卫带 -> MemManage 违规 ->
      升级为 HardFault。详见 Components/HardFaultLab/（hardfault_lab.c / HardFaultLab_SOP.md）。
      关闭 HARDFAULT_LAB 宏即不编译、不链接，工程行为不变。 */
   HardFaultLab_Run();
 #endif
-  /* Infinite loop */
-  for(;;)
+  if (MPU6050_EnableInt() != 0) { printf("WARN: MPU6050 data-ready INT enable FAILED!\r\n"); }   /* 启动 MPU6050 data-ready 中断（放调度器启动后，避免 200Hz ISR 在内核未起时冲击） */
+  /* 姿态外环：等 MPU6050 data-ready 中断（ISR 释放信号量）-> 读 -> 滤波 -> 融合 -> 外环PID -> VOFA
+     频率由传感器 INT（ATTITUDE_RATE_HZ）决定；osSemaphoreAcquire 带超时看门狗，
+     中断未配置/丢失时不永久阻塞。ISR 只 Give 信号量，业务全在此任务，符合 RTOS 铁律。 */
+  int16_t ra[3], rg[3];
+  ImuData_t imu;
+  int32_t tgtA = 0, tgtB = 0;
+  for (;;)
   {
-    osDelay(1);
+    if (osSemaphoreAcquire(g_semAttitudeDataReadyHandle, 100U) != osOK) {
+        continue;                       /* 超时：跳过本拍，不阻塞 */
+    }
+    if (MPU6050_ReadRaw(ra, rg, NULL) != 0) continue;   /* I2C 异常：丢弃本拍 */
+    ImuFilter_Update(ra, rg, &imu);
+    Attitude_Update(&imu);
+    Attitude_RunController();
+    Attitude_GetTargets(&tgtA, &tgtB);
+    Dbg_Telemetry_Send(&imu, Attitude_Get(), tgtA, tgtB);
   }
   /* USER CODE END StartSensorTask */
 }

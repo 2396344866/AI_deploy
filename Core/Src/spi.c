@@ -23,7 +23,7 @@
 /* USER CODE BEGIN 0 */
 
 #include "cmsis_os2.h" 
-extern osSemaphoreId_t g_FlashDmaDoneHandle; 
+extern osSemaphoreId_t g_semFlashDmaDoneHandle; 
 
 /* USER CODE END 0 */
 
@@ -111,7 +111,7 @@ void HAL_SPI_MspInit(SPI_HandleTypeDef* spiHandle)
     PA6     ------> SPI1_MISO
     PA7     ------> SPI1_MOSI
     */
-    GPIO_InitStruct.Pin = GPIO_PIN_5|GPIO_PIN_6|GPIO_PIN_7;
+    GPIO_InitStruct.Pin = W25Q64_SCK_Pin|W25Q64_DO_Pin|W25Q64_DI_Pin;
     GPIO_InitStruct.Mode = GPIO_MODE_AF_PP;
     GPIO_InitStruct.Pull = GPIO_NOPULL;
     GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
@@ -182,7 +182,7 @@ void HAL_SPI_MspDeInit(SPI_HandleTypeDef* spiHandle)
     PA6     ------> SPI1_MISO
     PA7     ------> SPI1_MOSI
     */
-    HAL_GPIO_DeInit(GPIOA, GPIO_PIN_5|GPIO_PIN_6|GPIO_PIN_7);
+    HAL_GPIO_DeInit(GPIOA, W25Q64_SCK_Pin|W25Q64_DO_Pin|W25Q64_DI_Pin);
 
     /* SPI1 DMA DeInit */
     HAL_DMA_DeInit(spiHandle->hdmatx);
@@ -200,7 +200,7 @@ void HAL_SPI_MspDeInit(SPI_HandleTypeDef* spiHandle)
 
 void HAL_SPI_TxCpltCallback(SPI_HandleTypeDef *hspi){
     if(hspi->Instance == SPI1){
-        osSemaphoreRelease(g_FlashDmaDoneHandle);        // FreeRTOS �»��� osSemaphoreRelease(...)
+        osSemaphoreRelease(g_semFlashDmaDoneHandle);        // FreeRTOS �»��� osSemaphoreRelease(...)
     }
 }
 
@@ -208,7 +208,7 @@ void HAL_SPI_TxCpltCallback(SPI_HandleTypeDef *hspi){
 // 注意：RX 完成同样经过 EOT 中断，确保最后一字节收齐后才释放
 void HAL_SPI_RxCpltCallback(SPI_HandleTypeDef *hspi){
     if(hspi->Instance == SPI1){
-        osSemaphoreRelease(g_FlashDmaDoneHandle);
+        osSemaphoreRelease(g_semFlashDmaDoneHandle);
     }
 }
 

@@ -26,8 +26,9 @@
  *   各模式 PC 预校验精度（1605 测试集，已与 PyTorch 94.70% 对齐，见 pc_int8_validate.py）：
  *     FLOAT32=94.70% / INT8_HYBRID=90.97% / FC1f32+FC2i8=91.59%
  *     / FC1i8+FC2i8=90.03% / FULL_INT8=88.72%。
- *   精度最优推荐 INT8_HYBRID（PC 90.97% / 硬件 90.90%）；当前默认 FULL_INT8
- *   （PC 88.72% / 硬件 88.66%，最省 Flash/计算）。
+ *   精度最优推荐 INT8_HYBRID（PC 90.97% / 硬件 90.90%）；ai_config.h 当前默认即为 HYBRID。
+ *   若切到 FULL_INT8（PC 88.79% / 硬件 88.66%，最省 Flash/计算），务必先重跑
+ *   ML/quantize_ptq.py 用当前 model_weights.h 重建 int8 产物（否则三方错配会崩到 ~42%）。
  * ---------------------------------------------------------------------------
  */
 #include "ai_infer.h"

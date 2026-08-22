@@ -22,7 +22,7 @@
 1. 拉低 CS。
 2. 用轮询发送指令（如 `0x02` 页写、`0x03` 读数据）+ 24 位地址。
 3. 数据段用 `HAL_SPI_Transmit_DMA` / `HAL_SPI_Receive_DMA` 批量收发。
-4. 等待 DMA 完成信号量 `g_FlashDmaDoneHandle`。
+4. 等待 DMA 完成信号量 `g_semFlashDmaDoneHandle`。
 5. 拉高 CS。
 
 为什么命令/地址不用 DMA：
@@ -43,9 +43,9 @@ STM32H7 带 D-Cache，DMA 与 CPU 看到的数据可能不一致。
 - 本项目 TX/RX 缓冲：`g_flashTxBuf` / `g_flashRxBuf`，大小 256 字节。
 
 ## 5. RTOS 同步
-- 使用信号量 `g_FlashDmaDoneHandle`（二值信号量，初始 0）。
+- 使用信号量 `g_semFlashDmaDoneHandle`（二值信号量，初始 0）。
 - DMA 传输完成中断链：`DMA TC → SPI EOT → HAL_SPI_Tx/RxCpltCallback → osSemaphoreRelease()`。
-- 任务里 `osSemaphoreAcquire(g_FlashDmaDoneHandle, osWaitForever)` 阻塞等待。
+- 任务里 `osSemaphoreAcquire(g_semFlashDmaDoneHandle, osWaitForever)` 阻塞等待。
 - **重要**：所有 Flash DMA 操作必须在 FreeRTOS 调度器启动后的任务上下文中执行，否则信号量永远不会释放。
 
 ## 6. API

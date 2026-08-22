@@ -1,5 +1,11 @@
-#ifndef _BSP_GPIO_H_
-#define	_BSP_GPIO_H_
+#ifndef _BSP_GPIO_H
+#define _BSP_GPIO_H
+
+/* =============================================================================
+ * BSP_GPIO — 板级 LED GPIO 宏（CubeMX 生成引脚：RED/GREEN/BLUE）
+ *   仅做引脚电平写/翻转，无初始化逻辑（GPIO 由 CubeMX 在 MX_GPIO_Init 配置）。
+ *   二次开发：新增板级 GPIO 控制请沿用 BSP_<Periph>.{h,c} 命名与 _BSP_<PERIPH>_H 保护宏。
+ * ============================================================================= */
 
 #include "main.h"
 

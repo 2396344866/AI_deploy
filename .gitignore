@@ -67,7 +67,15 @@ Components/HardFaultLab/
 
 # ===== 本地备份 / 调试产物（无需公开）=====
 Components/AI/backup/
-Components/Debug/
+# Components/Debug 仅忽略调试产物（日志/临时文本），源文件与文档随工程公开
+Components/Debug/*.log
+Components/Debug/*.txt
+
+# ===== 第三方手册 / 本地大文件（不公开）=====
+Doc/tjcwiki.pdf
+
+# ===== 被移除的示例头本地备份（非工程源）=====
+Components/AI/examples/
 
 # ===== 由 md 生成的 HTML 文档（非源，可重新生成）=====
 Doc/**/*.html

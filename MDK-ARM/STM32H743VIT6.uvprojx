@@ -10,7 +10,6 @@
       <TargetName>STM32H743VIT6</TargetName>
       <ToolsetNumber>0x4</ToolsetNumber>
       <ToolsetName>ARM-ADS</ToolsetName>
-      <pArmCC>6230000::V6.23::ARMCLANG</pArmCC>
       <pCCUsed>6230000::V6.23::ARMCLANG</pCCUsed>
       <uAC6>1</uAC6>
       <TargetOption>
@@ -341,7 +340,7 @@
               <MiscControls></MiscControls>
               <Define>USE_HAL_DRIVER,STM32H743xx,USE_PWR_LDO_SUPPLY,ARM_MATH_CM7,ARM_MATH_DSP</Define>
               <Undefine></Undefine>
-              <IncludePath>../Core/Inc;../Drivers/STM32H7xx_HAL_Driver/Inc;../Drivers/STM32H7xx_HAL_Driver/Inc/Legacy;../Drivers/CMSIS/Device/ST/STM32H7xx/Include;../Drivers/CMSIS/Include;../Components/BSP/Inc;../Components/Logger/Inc;../Components/Motor/Inc;../Components/AI/Inc;../Components/HardFaultLab/Inc;../Drivers/CMSIS/DSP/Include;../Drivers/CMSIS/NN/Include;../Middlewares/ST/ARM/DSP/Inc;../Middlewares/Third_Party/FreeRTOS/Source/include;../Drivers/CMSIS/RTOS2/Include;../Middlewares/Third_Party/FreeRTOS/Source/portable/GCC/ARM_CM4F;../Middlewares/Third_Party/FreeRTOS/Source/CMSIS_RTOS_V2</IncludePath>
+              <IncludePath>../Core/Inc;../Drivers/STM32H7xx_HAL_Driver/Inc;../Drivers/STM32H7xx_HAL_Driver/Inc/Legacy;../Drivers/CMSIS/Device/ST/STM32H7xx/Include;../Drivers/CMSIS/Include;../Components/BSP/Inc;../Components/Logger/Inc;../Components/Motor/Inc;../Components/AI/Inc;../Components/HardFaultLab/Inc;../Components/BSP/IMU/Inc;../Drivers/CMSIS/DSP/Include;../Drivers/CMSIS/NN/Include;../Middlewares/ST/ARM/DSP/Inc;../Middlewares/Third_Party/FreeRTOS/Source/include;../Drivers/CMSIS/RTOS2/Include;../Middlewares/Third_Party/FreeRTOS/Source/portable/GCC/ARM_CM4F;../Middlewares/Third_Party/FreeRTOS/Source/CMSIS_RTOS_V2;../Components/Debug/Inc</IncludePath>
             </VariousControls>
           </Cads>
           <Aads>
@@ -465,6 +464,62 @@
               <FileName>dma.c</FileName>
               <FileType>1</FileType>
               <FilePath>../Core/Src/dma.c</FilePath>
+              <FileOption>
+                <CommonProperty>
+                  <UseCPPCompiler>2</UseCPPCompiler>
+                  <RVCTCodeConst>0</RVCTCodeConst>
+                  <RVCTZI>0</RVCTZI>
+                  <RVCTOtherData>0</RVCTOtherData>
+                  <ModuleSelection>0</ModuleSelection>
+                  <IncludeInBuild>1</IncludeInBuild>
+                  <AlwaysBuild>2</AlwaysBuild>
+                  <GenerateAssemblyFile>2</GenerateAssemblyFile>
+                  <AssembleAssemblyFile>2</AssembleAssemblyFile>
+                  <PublicsOnly>2</PublicsOnly>
+                  <StopOnExitCode>11</StopOnExitCode>
+                  <CustomArgument></CustomArgument>
+                  <IncludeLibraryModules></IncludeLibraryModules>
+                  <ComprImg>1</ComprImg>
+                </CommonProperty>
+                <FileArmAds>
+                  <Cads>
+                    <interw>2</interw>
+                    <Optim>0</Optim>
+                    <oTime>2</oTime>
+                    <SplitLS>2</SplitLS>
+                    <OneElfS>2</OneElfS>
+                    <Strict>2</Strict>
+                    <EnumInt>2</EnumInt>
+                    <PlainCh>2</PlainCh>
+                    <Ropi>2</Ropi>
+                    <Rwpi>2</Rwpi>
+                    <wLevel>0</wLevel>
+                    <uThumb>2</uThumb>
+                    <uSurpInc>2</uSurpInc>
+                    <uC99>2</uC99>
+                    <uGnu>2</uGnu>
+                    <useXO>2</useXO>
+                    <v6Lang>0</v6Lang>
+                    <v6LangP>0</v6LangP>
+                    <vShortEn>2</vShortEn>
+                    <vShortWch>2</vShortWch>
+                    <v6Lto>2</v6Lto>
+                    <v6WtE>2</v6WtE>
+                    <v6Rtti>2</v6Rtti>
+                    <VariousControls>
+                      <MiscControls></MiscControls>
+                      <Define></Define>
+                      <Undefine></Undefine>
+                      <IncludePath></IncludePath>
+                    </VariousControls>
+                  </Cads>
+                </FileArmAds>
+              </FileOption>
+            </File>
+            <File>
+              <FileName>i2c.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>../Core/Src/i2c.c</FilePath>
               <FileOption>
                 <CommonProperty>
                   <UseCPPCompiler>2</UseCPPCompiler>
@@ -785,6 +840,56 @@
               <FileName>BSP_W25Q64.h</FileName>
               <FileType>5</FileType>
               <FilePath>..\Components\BSP\Inc\BSP_W25Q64.h</FilePath>
+            </File>
+          </Files>
+        </Group>
+        <Group>
+          <GroupName>IMU</GroupName>
+          <Files>
+            <File>
+              <FileName>imu_mpu6050.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Components\BSP\IMU\Src\drivers\imu_mpu6050.c</FilePath>
+            </File>
+            <File>
+              <FileName>imu_filter.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Components\BSP\IMU\Src\fusion\imu_filter.c</FilePath>
+            </File>
+            <File>
+              <FileName>attitude.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Components\BSP\IMU\Src\attitude.c</FilePath>
+            </File>
+            <File>
+              <FileName>madgwick.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Components\BSP\IMU\Src\fusion\madgwick.c</FilePath>
+            </File>
+            <File>
+              <FileName>attitude.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>..\Components\BSP\IMU\Inc\attitude.h</FilePath>
+            </File>
+            <File>
+              <FileName>imu_filter.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>..\Components\BSP\IMU\Inc\imu_filter.h</FilePath>
+            </File>
+            <File>
+              <FileName>imu_mpu6050.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>..\Components\BSP\IMU\Inc\imu_mpu6050.h</FilePath>
+            </File>
+            <File>
+              <FileName>madgwick.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>..\Components\BSP\IMU\Inc\madgwick.h</FilePath>
+            </File>
+            <File>
+              <FileName>mag_qmc5883l.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Components\BSP\IMU\Src\drivers\mag_qmc5883l.c</FilePath>
             </File>
           </Files>
         </Group>
@@ -3015,6 +3120,36 @@
               <FileName>hardfault_lab.h</FileName>
               <FileType>5</FileType>
               <FilePath>..\Components\HardFaultLab\Inc\hardfault_lab.h</FilePath>
+            </File>
+          </Files>
+        </Group>
+        <Group>
+          <GroupName>Debug</GroupName>
+          <Files>
+            <File>
+              <FileName>dbg_telemetry.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Components\Debug\Src\dbg_telemetry.c</FilePath>
+            </File>
+            <File>
+              <FileName>dbg_config.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>..\Components\Debug\Inc\dbg_config.h</FilePath>
+            </File>
+            <File>
+              <FileName>dbg_telemetry.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>..\Components\Debug\Inc\dbg_telemetry.h</FilePath>
+            </File>
+            <File>
+              <FileName>vofa_telemetry.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Components\Debug\Src\vofa_telemetry.c</FilePath>
+            </File>
+            <File>
+              <FileName>vofa_telemetry.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>..\Components\Debug\Inc\vofa_telemetry.h</FilePath>
             </File>
           </Files>
         </Group>

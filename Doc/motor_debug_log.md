@@ -38,7 +38,7 @@
 | 对象 | 类型 |
 |------|------|
 | InferenceDataMutex | Mutex |
-| ScreenDataSem / InferenceLockedSemHandle / g_FlashDmaDone | Binary Sem |
+| g_semScreenUpdateHandle / g_semInferenceLockHandle / g_semFlashDmaDoneHandle / g_semAttitudeDataReadyHandle | Binary Sem |
 | g_cmd_q | Queue(4×32B) |
 | Task_Inference/Motor/Network/Sensor/Screen/Flash/logger | 7 Thread |
 

@@ -124,6 +124,7 @@ int32_t  Motor_GetSpeed(MotorID id);     /* 当前速度（计数/节拍） */
 int32_t  Motor_GetPosition(MotorID id);  /* 当前累计位置 */
 float    Motor_GetRPM(MotorID id);       /* 估算转速 RPM（需 ENCODER_PPR 准确） */
 int32_t  Motor_GetPWM(MotorID id);       /* 当前输出 PWM（带符号，绝对值送 CCR） */
+int32_t  Motor_GetTargetSpeed(MotorID id); /* 当前速度环目标（计数/节拍） */
 
 /* 无仪表探针：读取并清零 PWMA/PWMB 引脚高电平累计（见 motor.c）。
    hiA/hiB 高电平样本数，ticks 总样本数（≈1000/秒）；占空比≈hiA/ticks。 */
