@@ -22,7 +22,9 @@
 #include "FreeRTOS.h"
 #include "cmsis_os2.h"
 #include "dma.h"
+#include "fdcan.h"
 #include "i2c.h"
+#include "iwdg.h"
 #include "spi.h"
 #include "tim.h"
 #include "usart.h"
@@ -30,11 +32,12 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-#include "BSP_GPIO.h"
-#include "BSP_USART.h"
+#include "led.h"
+#include "BSP_LOG.h"
 #include "motor.h"
 #include "attitude.h"       // 姿态解算 + 外环（Components/BSP/IMU）
 #include "dbg_telemetry.h"  // 调试遥测（Components/Debug，UART1 firewater）
+#include "logger.h"         // 启动文本日志用 #ifdef LOG_ENABLED 控制（生产模式变空）
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -69,6 +72,33 @@ u32 UID_Word0,UID_Word1,UID_Word2;
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
+
+/* 启动期复位源判定：每次上电第一行串口输出复位类别，直接回答"是不是 IWDG 复位"。
+ * H743 的 RCC->RSR 复位标志位（stm32h743xx.h）：
+ *   IWDG1RSTF=bit26  WWDG1RSTF=bit28  SFTRSTF=bit24  PORRSTF=bit23
+ *   BORRSTF=bit21    PINRSTF=bit22    LPWRRSTF=bit30
+ * 读后清除(RMVF)，便于下次判定。注意：运行期 IWDG 复位 = TIM7_IRQHandler 每 500ms 经
+ * watchdog_should_feed() 判定不通过（被监视任务心跳不新鲜→某任务/ISR 冻结）；POST 期 =
+ * 各 Xxx_Test 协作喂缺失（卡死→IWDG 抓到）。故本打印显示 IWDG1 时，真因是"某被监视任务/ISR
+ * 冻结"，需结合下方 POST 标记 + TIM7 心跳 freshness 定位冻结点。 */
+#ifdef LOG_ENABLED
+static void print_reset_cause(void)
+{
+    uint32_t rsr = RCC->RSR;
+    const char *src = "UNKNOWN";
+    if      (rsr & RCC_RSR_IWDG1RSTF)  src = "IWDG1(独立看门狗超时->有任务/ISR 冻结饿死喂狗点)";
+    else if (rsr & RCC_RSR_WWDG1RSTF)  src = "WWDG1(窗口看门狗)";
+    else if (rsr & RCC_RSR_SFTRSTF)    src = "SFTRST(软件/NVIC_SystemReset)";
+    else if (rsr & RCC_RSR_PORRSTF)    src = "POR(上电)";
+    else if (rsr & RCC_RSR_BORRSTF)    src = "BOR(欠压)";
+    else if (rsr & RCC_RSR_PINRSTF)    src = "PINRST(NRST引脚)";
+    else if (rsr & RCC_RSR_LPWRRSTF)   src = "LPWR(低功耗退出)";
+    printf("[BOOT] ResetSrc=%s  RSR=0x%08lX\r\n", src, (unsigned long)rsr);
+    __HAL_RCC_CLEAR_RESET_FLAGS();   /* 清除，便于下次判定 */
+}
+#endif /* LOG_ENABLED */
+
+#include "watchdog_heartbeat.h"   /* 看门狗心跳：POST 收尾 watchdog_arm() 后 TIM7 按任务心跳喂狗 */
 
 /* USER CODE END 0 */
 
@@ -118,21 +148,49 @@ int main(void)
   MX_TIM4_Init();
   MX_TIM7_Init();
   MX_I2C1_Init();
+  MX_FDCAN1_Init();
+  MX_USART2_UART_Init();
+  MX_USART3_UART_Init();
+  MX_USART6_UART_Init();
+  MX_IWDG1_Init();
   /* USER CODE BEGIN 2 */
+#if !defined(APP_ENABLE_WATCHDOG) || !APP_ENABLE_WATCHDOG
+  printf("[BOOT] IWDG DISABLED (debug) - reset masked off\r\n");
+#endif
 	// 1. DMA Circular
 	HAL_UART_Receive_DMA(&huart4, rx_buf, RX4_BUFFER_SIZE);
 
 	// 2. IDLE
 	__HAL_UART_ENABLE_IT(&huart4, UART_IT_IDLE);
 	Dbg_Telemetry_Init();   /* 调试遥测：UART1 DMA 接收启动前用 DBG_UART_BAUD 重设波特率 */
-	BSP_UART1_RxStart();
+	BSP_LOG_UART1_RxStart();
+#ifdef LOG_ENABLED
+	print_reset_cause();     /* 启动期复位源判定：每次上电首行报告 IWDG1/POR/BOR/... */
+#endif
+#if !defined(APP_ENABLE_MOTOR) || !APP_ENABLE_MOTOR
+    /* 非 Motor profile（如 LOGGER）：Motor 模块未使能，motor.c 不会启动 TIM7；
+     * 但看门狗 1ms 心跳依赖 TIM7，此处无条件启动，保证心跳与喂狗不耦合 Motor 是否编入。 */
+    HAL_TIM_Base_Start_IT(&htim7);
+#endif
 	Motor_App_Init();        /* 启动 TIM1 PWM / TIM3-4 编码器 / TIM7 1ms 控制环 */
-	if (Attitude_Init() != 0) { 
+#if defined(APP_ENABLE_SENSOR) && APP_ENABLE_SENSOR
+	if (Attitude_Init() != 0) {
+#ifdef LOG_ENABLED
 		printf("WARN: Attitude/MPU6050 Init FAILED!\r\n");
-	} else { 
-	printf("MPU6050 Init OK\r\n"); 
-	}         /* 初始化 MPU6050 + 姿态库（I2C1 已由 CubeMX 生成并初始化） */
+#else
+		(void)0;
+#endif
+	} else {
+#ifdef LOG_ENABLED
+		printf("MPU6050 Init OK\r\n");
+#endif
+	}         /* 初始化 MPU6050 + 姿态库（I2C1 已由 CubeMX 生成并初始化）；仅 Sensor profile 运行 */
+#endif /* APP_ENABLE_SENSOR */
+#ifdef LOG_ENABLED
 	printf("System Init Success!\r\n");
+#endif
+    log_wdt_feed();   /* 调度器启动前先踢狗：上电初始化(Motor_App_Init/Attitude_Init)若偏长，
+                         避免 boot 阶段 IWDG(≈4.1s)超时复位；喂狗只是写 IWDG 寄存器，启动前调用安全 */
 
   /* USER CODE END 2 */
 
@@ -178,14 +236,15 @@ void SystemClock_Config(void)
   /** Initializes the RCC Oscillators according to the specified parameters
   * in the RCC_OscInitTypeDef structure.
   */
-  RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSE;
+  RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_LSI|RCC_OSCILLATORTYPE_HSE;
   RCC_OscInitStruct.HSEState = RCC_HSE_ON;
+  RCC_OscInitStruct.LSIState = RCC_LSI_ON;
   RCC_OscInitStruct.PLL.PLLState = RCC_PLL_ON;
   RCC_OscInitStruct.PLL.PLLSource = RCC_PLLSOURCE_HSE;
   RCC_OscInitStruct.PLL.PLLM = 5;
   RCC_OscInitStruct.PLL.PLLN = 192;
   RCC_OscInitStruct.PLL.PLLP = 2;
-  RCC_OscInitStruct.PLL.PLLQ = 6;
+  RCC_OscInitStruct.PLL.PLLQ = 2;
   RCC_OscInitStruct.PLL.PLLR = 2;
   RCC_OscInitStruct.PLL.PLLRGE = RCC_PLL1VCIRANGE_2;
   RCC_OscInitStruct.PLL.PLLVCOSEL = RCC_PLL1VCOWIDE;
@@ -238,7 +297,8 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
     HAL_IncTick();
   }
   /* USER CODE BEGIN Callback 1 */
-
+  /* TIM7 分支已迁至 stm32h7xx_it.c 的 TIM7_IRQHandler USER CODE 块，
+     此处不再占用共享弱回调，避免与其它定时器的 period-elapsed 回调冲突。 */
   /* USER CODE END Callback 1 */
 }
 

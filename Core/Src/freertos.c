@@ -26,19 +26,24 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-#include "BSP_GPIO.h" // GPIO
-#include "BSP_USART.h"// UART 整理
+#include "led.h" // LED indicator
+#include "BSP_LOG.h"// LOG 串口
 #include "BSP_W25Q64.h"// UART 整理
 #include "logger.h"    // 统一日志模块（分级/时间戳/标签/编译开关）
+#include "dbg_config.h" // 调试开关集中管理（DBG_LOG_<TASK> 等；对齐开发规范第76行；此前经 dbg_telemetry.h 间接带入）
+#include "app_config.h" // L1 功能包含门控（APP_ENABLE_X / APP_PROFILE_*）：决定模块是否编进固件
 #include "motor.h"     // 双电机 速度/位置闭环（阶段1）
+#include "esp32s3.h"   // ESP32-S3 图像协处理器接收端（自建 BSP 模块）
+#include "esp01s.h"     // ESP-01S WiFi / 阿里云 MQTT / OTA（自建 BSP 模块，USART2）
 #include "arm_math.h"
 #include "model_weights.h"
 #include "ai_infer.h"
 #include "test_dataset_processed.h"
-#include "hardfault_lab.h"   // HardFault 实验室（仅当 HARDFAULT_LAB 宏开启时调用/链接，模块在 Components/HardFaultLab/）
 #include "attitude.h"        // 姿态解算 + 外环控制器（Components/BSP/IMU）
 #include "imu_mpu6050.h"     // MPU6050 底层 I2C 读取
-#include "dbg_telemetry.h"  // 调试遥测（UART1 firewater，见 Components/Debug）
+  #include "dbg_telemetry.h"  // 调试遥测（UART1 firewater，见 Components/Debug）
+  #include "selftest.h"      // 上电自检（POST）框架：Task_Test 调用 Selftest_RunAll（见 Components/POSTest/Src/selftest.c）
+  #include "watchdog_heartbeat.h" // POST 收尾 watchdog_arm() + 运行期任务心跳喂狗（TIM7 经其判定）
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -59,21 +64,69 @@
 /* Private variables ---------------------------------------------------------*/
 /* USER CODE BEGIN Variables */
 
-/* 命令通道：改用 CubeMX 生成的消息队列 g_cmd_qHandle（ItemSize=32, Size=4）。
-   ISR(BSP_UART1_OnFrame) 只做 osMessageQueuePut，任务(StartMotorTask) 用
-   osMessageQueueGet 收 —— 不再使用裸 volatile 标志 + 临界区拷贝模型。 */
+/* 前向声明：g_cmd_qHandle 定义在下方的 CubeMX 生成区（line ~198）。
+   DbgConsole_Process() 早于定义即调用 osMessageQueueGet，故先 extern 声明。
+   仅声明不定义，避免与生成区重复（重生成保留）。 */
+extern osMessageQueueId_t g_cmd_qHandle;
 
-typedef struct {
-		uint32_t num_test_samples;
-    float overall_accuracy;
-    float macro_precision;
-    float macro_recall;
-    float macro_f1;
-    float total_time_ms;
-    uint8_t data_is_ready; // 标志位：告诉网络任务数据是否已准备好
-} TestResults_t;
+/* 命令通道 = g_cmd_qHandle（ItemSize=32, Size=4，CubeMX 生成）。
+   ISR(OnFrame) 仅 osMessageQueuePut；常驻 StartLoggerTask 出队解析 —— 控制台不受 Motor 开关影响。 */
 
-TestResults_t g_Test_results = {0}; // 全局共享变量
+/* 调试控制台（常驻 Logger 任务）：g_cmd_qHandle 唯一消费者，按前缀分发。
+ * 分类（单消费者，统一分发，模块逻辑留各自 .c）：
+ *   - 全局(常活)：debug<n> 设级 / X ESP32-S3 统计
+ *   - Sensor(守卫 APP_ENABLE_SENSOR)：T/P/K/C/F/D/M -> Attitude_ProcessCommand
+ *   - Motor(守卫 APP_ENABLE_MOTOR)：A/B/S/R -> Motor_ProcessCommand
+ * APP_ENABLE_X 未定义则不调 handler，控制台永活、不向空模块分发。 */
+volatile uint32_t g_dbg_cmd_hits    = 0U;  /* DbgConsole_Process 成功出队次数 */
+static void DbgConsole_Process(void)
+{
+    char lbuf[32];
+    if (osMessageQueueGet(g_cmd_qHandle, lbuf, NULL, 0U) != osOK) {
+        return;   /* 无命令：非阻塞返回，不拖慢 2ms 日志循环 */
+    }
+    g_dbg_cmd_hits++;   /* 成功出队一次 */
+    uint16_t n = 0U;
+    while (lbuf[n] != '\0' && n < 31U) n++;   /* 计算命令长度（无 string.h 依赖） */
+
+    if (lbuf[0] == 'X') {
+#if APP_ENABLE_ESP32S3
+        ESP32S3_PrintStats();                  /* ESP32-S3 接收统计经 UART1 打印（统一调试通道） */
+#endif
+    } else if (lbuf[0] == 'd' && lbuf[1] == 'e' && lbuf[2] == 'b' &&
+               lbuf[3] == 'u' && lbuf[4] == 'g') {
+        /* debug<n>：运行期设级，免重烧现场调级。
+         * n=0 FATAL/1 ERROR/2 WARN/3 INFO/4 DEBUG/5 TRACE。
+         * 生效级 = min(LOG_COMPILE_MAX_LEVEL, n)（编译上限封顶）。
+         * 回执绕过门控直发：命令确认任何级可见（FATAL 黑洞修复）。 */
+        int lvl = lbuf[5] - '0';
+        if (lvl >= 0 && lvl <= 5) {
+            logger_set_level((uint8_t)lvl);
+            char ack[] = "> log level -> X\r\n";
+            ack[15] = (char)('0' + logger_get_level());   /* 显示真实生效级(已被编译上限封顶) */
+            BSP_LOG_UART1_SendPoll((const uint8_t *)ack, (uint16_t)(sizeof(ack) - 1U));
+        } else {
+            static const char usage[] = "> debug usage: debug0..debug5 = FATAL..TRACE\r\n";
+            BSP_LOG_UART1_SendPoll((const uint8_t *)usage, (uint16_t)(sizeof(usage) - 1U));
+        }
+    } else if (lbuf[0] == 'T' || lbuf[0] == 'P' || lbuf[0] == 'K' ||
+               lbuf[0] == 'C' || lbuf[0] == 'F' || lbuf[0] == 'D' || lbuf[0] == 'M') {
+#if APP_ENABLE_SENSOR
+        Attitude_ProcessCommand(lbuf, n);      /* 姿态外环命令（属 Sensor 模块，仅 Sensor 使能时有效） */
+#endif
+    } else if (lbuf[0] == 'A' || lbuf[0] == 'B' || lbuf[0] == 'S' || lbuf[0] == 'R') {
+#if APP_ENABLE_MOTOR
+        Motor_ProcessCommand(lbuf, n);         /* 电机命令（A/B/S/R）：保留在 Motor 模块，仅 Motor 使能时有效 */
+#else
+        static const char moff[] = "> motor module disabled\r\n";
+        BSP_LOG_UART1_SendPoll((const uint8_t *)moff, (uint16_t)(sizeof(moff) - 1U));
+#endif
+    }
+    /* 其余未知命令：仅回显（见下方），不分发到任何模块 */
+    BSP_LOG_UART1_SendPoll((const uint8_t *)lbuf, n);  /* 回显：从 ISR 移到任务，符合范式 */
+}
+
+TestResults_t g_Test_results = {0}; // 全局共享变量（类型 TestResults_t 见 ai_infer.h）
 
 /* USER CODE END Variables */
 /* Definitions for Task_Inference */
@@ -125,10 +178,29 @@ const osThreadAttr_t Task_logger_attributes = {
   .stack_size = 512 * 4,
   .priority = (osPriority_t) osPriorityLow2,
 };
+/* Definitions for Task_Esp32S3 */
+osThreadId_t Task_Esp32S3Handle;
+const osThreadAttr_t Task_Esp32S3_attributes = {
+  .name = "Task_Esp32S3",
+  .stack_size = 512 * 4,
+  .priority = (osPriority_t) osPriorityAboveNormal,
+};
+/* Definitions for Task_Test */
+osThreadId_t Task_TestHandle;
+const osThreadAttr_t Task_Test_attributes = {
+  .name = "Task_Test",
+  .stack_size = 256 * 4,
+  .priority = (osPriority_t) osPriorityHigh,
+};
 /* Definitions for g_cmd_q */
 osMessageQueueId_t g_cmd_qHandle;
 const osMessageQueueAttr_t g_cmd_q_attributes = {
   .name = "g_cmd_q"
+};
+/* Definitions for g_ImgResultImg_q */
+osMessageQueueId_t g_ImgResultImg_qHandle;
+const osMessageQueueAttr_t g_ImgResultImg_q_attributes = {
+  .name = "g_ImgResultImg_q"
 };
 /* Definitions for InferenceDataMutex */
 osMutexId_t InferenceDataMutexHandle;
@@ -159,7 +231,7 @@ const osSemaphoreAttr_t g_semAttitudeDataReady_attributes = {
 /* Private function prototypes -----------------------------------------------*/
 /* USER CODE BEGIN FunctionPrototypes */
 int DIV2IFSCN_Inference(const float* input, float* outputs);
-void W25QXX_Test(void);
+int W25QXX_Test(void);
 /* StartLoggerTask 的原型由 CubeMX 在下方（USER CODE 块外）统一生成，此处不再重复声明 */
 /* USER CODE END FunctionPrototypes */
 
@@ -170,8 +242,22 @@ void StartSensorTask(void *argument);
 void StartScreenTask(void *argument);
 void StartFlashTask(void *argument);
 void StartLoggerTask(void *argument);
+void StartEsp32S3Task(void *argument);
+void StartTestTask(void *argument);
 
 void MX_FREERTOS_Init(void); /* (MISRA C 2004 rule 8.1) */
+
+/* Hook prototypes */
+void vApplicationStackOverflowHook(xTaskHandle xTask, char *pcTaskName);
+
+/* USER CODE BEGIN 4 */
+void vApplicationStackOverflowHook(xTaskHandle xTask, char *pcTaskName)
+{
+   /* Run time stack overflow checking is performed if
+   configCHECK_FOR_STACK_OVERFLOW is defined to 1 or 2. This hook function is
+   called if a stack overflow is detected. */
+}
+/* USER CODE END 4 */
 
 /**
   * @brief  FreeRTOS initialization
@@ -180,7 +266,8 @@ void MX_FREERTOS_Init(void); /* (MISRA C 2004 rule 8.1) */
   */
 void MX_FREERTOS_Init(void) {
   /* USER CODE BEGIN Init */
-  logger_init();   /* 初始化日志环形缓冲（必须在任务创建前） */
+  logger_init();   /* 初始化日志环形缓冲（须先于任务创建） */
+  ESP32S3_BSP_Init();  /* ESP32-S3：仅强制 USART6 921600（队列/任务由 CubeMX 创建） */
 
   /* USER CODE END Init */
   /* Create the mutex(es) */
@@ -216,6 +303,9 @@ void MX_FREERTOS_Init(void) {
   /* creation of g_cmd_q */
   g_cmd_qHandle = osMessageQueueNew (4, 32, &g_cmd_q_attributes);
 
+  /* creation of g_ImgResultImg_q */
+  g_ImgResultImg_qHandle = osMessageQueueNew (8, 72, &g_ImgResultImg_q_attributes);
+
   /* USER CODE BEGIN RTOS_QUEUES */
   /* add queues, ... */
   /* USER CODE END RTOS_QUEUES */
@@ -242,11 +332,13 @@ void MX_FREERTOS_Init(void) {
   /* creation of Task_logger */
   Task_loggerHandle = osThreadNew(StartLoggerTask, NULL, &Task_logger_attributes);
 
-  /* USER CODE BEGIN RTOS_THREADS */
-  /* add threads, ... */
+  /* creation of Task_Esp32S3 */
+  Task_Esp32S3Handle = osThreadNew(StartEsp32S3Task, NULL, &Task_Esp32S3_attributes);
 
-  /* 日志后台任务 Task_logger 已由 CubeMX 原生生成（见上方 "creation of Task_logger"，
-     osThreadNew 在 freertos.c:238），此处删去手写重复创建，避免同一任务被建两次。 */
+  /* creation of Task_Test */
+  Task_TestHandle = osThreadNew(StartTestTask, NULL, &Task_Test_attributes);
+
+  /* USER CODE BEGIN RTOS_THREADS */
   /* USER CODE END RTOS_THREADS */
 
   /* USER CODE BEGIN RTOS_EVENTS */
@@ -257,122 +349,48 @@ void MX_FREERTOS_Init(void) {
 
 /* USER CODE BEGIN Header_StartInferenceTask */
 /**
-  * @brief  Function implementing the Task_AL_deploy thread.
+  * @brief  Function implementing the Task_Inference thread.
   * @param  argument: Not used
-  * @rettest None
+  * @retval None
   */
 /* USER CODE END Header_StartInferenceTask */
 void StartInferenceTask(void *argument)
 {
   /* USER CODE BEGIN StartInferenceTask */
-  /* Infinite loop */
-	// 1. 初始化 (只运行一次)
-  // 确保推理函数内部的初始化标志已经重置或能够正常运行
-  float dummy_out[4];
-  AI_Inference((float*)test_features_processed[0], dummy_out);
-#if DBG_LOG_ENABLE
-  LOG_I("INFER", "AI Task Started. Beginning Batch Inference...");
-#endif
-  int tp[4] = {0}, fp[4] = {0}, fn[4] = {0};
-  int correct_total = 0;
-  uint32_t start_time = HAL_GetTick(); 
-
-  // 2. 推理循环
-  for(int i = 0; i < NUM_TEST_SAMPLES; i++) {
-      float test_output[4] = {0};
-      int pred = AI_Inference((float*)test_features_processed[i], test_output);
-      int actual = test_labels[i];
-
-      if (pred == actual) { correct_total++; tp[actual]++; }
-      else { fp[pred]++; fn[actual]++; }
-      
-      // 重要：在 RTOS 中必须让出 CPU，否则优先级低的任务无法运行
-      if(i % 10 == 0) osDelay(1); 
-  }
-
-  // 3. 结果打印
-  uint32_t end_time = HAL_GetTick();
-  float total_time_ms = (float)(end_time - start_time);
-	
-	
-	float macro_precision = 0.0f;
-  float macro_recall = 0.0f;
-  float macro_f1 = 0.0f;
-
-  for (int i = 0; i < 4; i++) {
-      float p = 0.0f;
-      float r = 0.0f;
-      
-      // 计算 Precision
-      if ((tp[i] + fp[i]) > 0) {
-          p = (float)tp[i] / (tp[i] + fp[i]);
-      }
-      // 计算 Recall
-      if ((tp[i] + fn[i]) > 0) {
-          r = (float)tp[i] / (tp[i] + fn[i]);
-      }
-
-      macro_precision += p;
-      macro_recall += r;
-
-      // 计算 F1-Score
-      if ((p + r) > 0) {
-          macro_f1 += (2.0f * p * r) / (p + r);
-      }
-  }
-  // 取平均值
-  macro_precision /= 4.0f;
-  macro_recall /= 4.0f;
-  macro_f1 /= 4.0f;
-	float overall_accuracy = (float)correct_total / NUM_TEST_SAMPLES;
-  /* 推理结果汇总：分级日志（INFO），由 LoggerTask 异步刷串口 */
-#if DBG_LOG_ENABLE
-  LOG_I("INFER", "Summary: samples=%d acc=%.4f prec=%.4f recall=%.4f f1=%.4f total=%.2fms per=%.4fms",
-        NUM_TEST_SAMPLES, overall_accuracy, macro_precision, macro_recall, macro_f1,
-        total_time_ms, total_time_ms / NUM_TEST_SAMPLES);
-#endif
-  /* 写入共享结构，互斥量保护，供 NetworkTask 读取（生产逻辑，必须保留） */
-  if (osMutexAcquire(InferenceDataMutexHandle, osWaitForever) == osOK) {
-      g_Test_results.num_test_samples = NUM_TEST_SAMPLES;
-      g_Test_results.overall_accuracy = overall_accuracy;
-      g_Test_results.macro_precision = macro_precision;
-      g_Test_results.macro_recall = macro_recall;
-      g_Test_results.macro_f1 = macro_f1;
-      g_Test_results.total_time_ms = total_time_ms;
-      g_Test_results.data_is_ready = 1;
-      osMutexRelease(InferenceDataMutexHandle);
-  }
-
-  /* 推理完成，任务进入空闲（优先级继承调试已移除） */
-  for(;;) {
+#if APP_ENABLE_INFERENCE
+  /* 上电诊断推理已抽至 FaultDiag_ML_Test(selftest.c)，由 Task_Test 一次性跑；
+     结果写 g_Test_results 供 NetworkTask 读。本循环仅待命。 */
+  for (;;) {
+    task_heartbeat_kick(HB_INFERENCE);   /* 运行期存活探针：TIM7 ISR 据此判 IWDG 是否喂 */
     osDelay(1000);
   }
+#endif /* APP_ENABLE_INFERENCE */
+  osThreadTerminate(osThreadGetId());   /* 模块未使能：任务自删(CMSIS-RTOS2 API)，永不返回 */
   /* USER CODE END StartInferenceTask */
 }
 
 /* USER CODE BEGIN Header_StartMotorTask */
 /**
-* @brief Function implementing the Task_Motor thread.
-* @param argument: Not used
-* @rettest None
-*/
+  * @brief  Function implementing the Task_Motor thread.
+  * @param  argument: Not used
+  * @retval None
+  */
 /* USER CODE END Header_StartMotorTask */
 void StartMotorTask(void *argument)
 {
   /* USER CODE BEGIN StartMotorTask */
-  /* 电机控制任务（阶段1：速度/位置闭环已在 TIM7 1ms 中断完成）。
-     本任务职责：
-       1. PC13 按键（低电平）：短按切换 运行/刹车；
-       2. 每秒打印一次双电机速度/位置/估算转速（仅供联调，发布版可关）。 */
-#if DBG_LOG_ENABLE
+#if APP_ENABLE_MOTOR
+
+  /* 电机任务（阶段1：速度/位置闭环已在 TIM7 1ms 中断完成）。
+   * 职责：1) PC13 按键(低电平)短按切 运行/刹车；2) 每秒打双电机遥测(联调)。
+   * 命令解析已迁 StartLoggerTask，本任务不处理命令。 */
+#if DBG_LOG_MOTOR
   LOG_I("MOTOR", "Motor task started. Press KEY(PC13) to toggle run/brake.");
 #endif
   uint32_t log_cnt = 9;   /* 首行遥测提前到 ~100ms 后，便于一眼确认任务存活 */
 
-  /* 串口命令采用"ISR 入队 + 任务出队"模型（见 BSP_UART1_OnFrame → g_cmd_qHandle）。
-     命令解析在任务上下文，可安全 LOG / 改电机状态；回显也在此处完成。 */
-
   for(;;) {
+    task_heartbeat_kick(HB_MOTOR);   /* 运行期存活探针：TIM7 ISR 据此判 IWDG 是否喂 */
     /* 1. 按键：低电平触发（PC13 已上拉）。做简单消抖：连续两次读到低才动作 */
     static uint8_t key_prev = 1, key_stable = 1;
     uint8_t key_now = HAL_GPIO_ReadPin(KEY_GPIO_Port, KEY_Pin);
@@ -387,22 +405,8 @@ void StartMotorTask(void *argument)
     }
     key_prev = key_now;
 
-    /* 2. 串口命令：从 CubeMX 生成的 g_cmd_qHandle 出队（非阻塞，避免空等拖慢 100ms 周期） */
-    char lbuf[32];
-    if (osMessageQueueGet(g_cmd_qHandle, lbuf, NULL, 0U) == osOK) {
-        uint16_t n = 0U;
-        while (lbuf[n] != '\0' && n < 31U) n++;   /* 计算命令长度（无 string.h 依赖） */
-        if (lbuf[0] == 'T' || lbuf[0] == 'P' || lbuf[0] == 'K' ||
-            lbuf[0] == 'C' || lbuf[0] == 'F' || lbuf[0] == 'D' || lbuf[0] == 'M') {
-            Attitude_ProcessCommand(lbuf, n);      /* 姿态外环命令（T/P/K/C/F/D） */
-        } else {
-            Motor_ProcessCommand(lbuf, n);         /* 电机命令（A/B/S/R） */
-        }
-        BSP_UART1_SendPoll((const uint8_t *)lbuf, n);  /* 回显：从 ISR 移到任务，符合范式 */
-    }
-
-    /* 3. 每秒打印一次遥测（DBG_LOG_ENABLE=0 时整体关闭，避免干扰 VOFA 波形） */
-#if DBG_LOG_ENABLE
+    /* 3. 每秒打印一次遥测（对应任务开关关闭时不出，避免干扰 VOFA 波形） */
+#if DBG_LOG_MOTOR
     if (++log_cnt >= 10) {   /* 10 * 100ms = 1s */
         log_cnt = 0;
         LOG_I("MOTOR", "A spd=%ld pwm=%ld rpm=%.1f | B spd=%ld pwm=%ld rpm=%.1f | run=%d mode=%d",
@@ -410,7 +414,7 @@ void StartMotorTask(void *argument)
               Motor_GetSpeed(MOTOR_B), Motor_GetPWM(MOTOR_B), Motor_GetRPM(MOTOR_B),
               g_motor_sys.running, g_motor_sys.mode);
 
-        /* 无仪表探针：回读关键引脚实际电平，确认 PWM/STBY 是否真正出现在物理引脚上 */
+        /* 无仪表探针：回读关键引脚电平，确认 PWM/STBY 真出现在物理脚 */
         uint32_t hiA = 0, hiB = 0, ticks = 0;
         Motor_Probe_ReadAndClear(&hiA, &hiB, &ticks);
         LOG_I("PROBE", "STBY=%d PWMA_hi=%lu/%lu PWMB_hi=%lu/%lu TIM1span=%lu ENC_A(PB6)=%d ENC_B(PB7)=%d ENC_C(PB4)=%d ENC_D(PB5)=%d",
@@ -423,71 +427,109 @@ void StartMotorTask(void *argument)
 
     osDelay(100);
   }
+#endif /* APP_ENABLE_MOTOR */
+  osThreadTerminate(osThreadGetId());   /* 模块未使能：任务自删(CMSIS-RTOS2 API)，永不返回 */
   /* USER CODE END StartMotorTask */
 }
 
 /* USER CODE BEGIN Header_StartNetworkTask */
 /**
-* @brief Function implementing the Task_Network thread.
-* @param argument: Not used
-* @rettest None
-*/
+  * @brief  Function implementing the Task_Network thread.
+  * @param  argument: Not used
+  * @retval None
+  */
 /* USER CODE END Header_StartNetworkTask */
 void StartNetworkTask(void *argument)
 {
   /* USER CODE BEGIN StartNetworkTask */
+#if APP_ENABLE_NETWORK
+
+  /* 上云初始化（一次性；失败每 10s 重试；阻塞超时不影响其它任务） */
+  static uint8_t  s_net_up = 0;
+  static uint32_t s_last_try = 0;
   /* Infinite loop */
   for(;;)
   {
+    task_heartbeat_kick(HB_NETWORK);   /* 运行期存活探针：TIM7 ISR 据此判 IWDG 是否喂 */
+    uint32_t s_now = osKernelGetTickCount();
+    if (!s_net_up && (s_last_try == 0U || (s_now - s_last_try) > 10000U)) {
+        s_last_try = s_now;
+        if (ESP01S_Init() == ESP01S_OK &&
+            ESP01S_ConnectTCP(ESP01S_MQTT_BROKER, ESP01S_MQTT_PORT) == ESP01S_OK &&
+            ESP01S_MQTT_Connect() == ESP01S_OK) {
+            s_net_up = 1;
+            LOG_I("NET", "Aliyun MQTT online");
+        } else {
+            LOG_W("NET", "Network not ready, retry in 10s");
+        }
+    }
     if (g_Test_results.data_is_ready == 1) {
         if (osMutexAcquire(InferenceDataMutexHandle, osWaitForever) == osOK) {
-					
 
-            // 安全读取数据并打印
-						#if DBG_LOG_ENABLE
+            /* 安全读取数据并打印 */
+#if DBG_LOG_NET
             LOG_I("NET", "Summary (From Network Task): acc=%.4f prec=%.4f recall=%.4f f1=%.4f total=%.2fms",
                   g_Test_results.overall_accuracy, g_Test_results.macro_precision,
                   g_Test_results.macro_recall, g_Test_results.macro_f1,
                   g_Test_results.total_time_ms);
-						#endif
-            
+#endif
+
+            /* 组装 JSON 并发布到阿里云（MQTT QoS0） */
+            float s_roll  = Attitude_GetRoll();
+            float s_pitch = Attitude_GetPitch();
+            float s_yaw   = Attitude_GetYaw();
+            float s_magh  = Attitude_GetMagHeading();
+            char s_json[256];
+            int s_n = snprintf(s_json, sizeof(s_json),
+                "{\"infer\":{\"acc\":%.4f,\"prec\":%.4f,\"rec\":%.4f,\"f1\":%.4f,\"ms\":%.2f},"
+                "\"att\":{\"roll\":%.2f,\"pitch\":%.2f,\"yaw\":%.2f,\"mag_h\":%.2f}}",
+                g_Test_results.overall_accuracy, g_Test_results.macro_precision,
+                g_Test_results.macro_recall, g_Test_results.macro_f1,
+                g_Test_results.total_time_ms,
+                s_roll, s_pitch, s_yaw, s_magh);
+            if (s_net_up && s_n > 0 && s_n < (int)sizeof(s_json)) {
+                if (ESP01S_MQTT_Pub(ESP01S_MQTT_PUB_TOPIC, s_json) == ESP01S_OK) {
+#if DBG_LOG_NET
+                    LOG_I("NET", "published %d bytes", s_n);
+#endif
+                } else {
+                    LOG_W("NET", "publish failed");
+                }
+            }
+
             g_Test_results.data_is_ready = 0; // 打印后重置标志
             osMutexRelease(InferenceDataMutexHandle);
         }
     }
-    osDelay(100); // 不要让任务空转，给其他任务机会
+    osDelay(200); // 上云节奏；推理非每帧 ready
   }
+#endif /* APP_ENABLE_NETWORK */
+  osThreadTerminate(osThreadGetId());   /* 模块未使能：任务自删(CMSIS-RTOS2 API)，永不返回 */
   /* USER CODE END StartNetworkTask */
 }
 
 /* USER CODE BEGIN Header_StartSensorTask */
 /**
-* @brief Function implementing the Task_Sensor thread.
-* @param argument: Not used
-* @rettest None
-*/
+  * @brief  Function implementing the Task_Sensor thread.
+  * @param  argument: Not used
+  * @retval None
+  */
 /* USER CODE END Header_StartSensorTask */
 void StartSensorTask(void *argument)
 {
   /* USER CODE BEGIN StartSensorTask */
-	
-#ifdef HARDFAULT_LAB
-  /* 测试故障诊断用 测试故障诊断用 测试故障诊断用 测试故障诊断用
-		 HardFault 实验室（v3.2）：配置四级中断抢占 + MPU 栈守卫带，
-     触发四层中断嵌套级联，使嵌套压栈越过守卫带 -> MemManage 违规 ->
-     升级为 HardFault。详见 Components/HardFaultLab/（hardfault_lab.c / HardFaultLab_SOP.md）。
-     关闭 HARDFAULT_LAB 宏即不编译、不链接，工程行为不变。 */
-  HardFaultLab_Run();
-#endif
-  if (MPU6050_EnableInt() != 0) { printf("WARN: MPU6050 data-ready INT enable FAILED!\r\n"); }   /* 启动 MPU6050 data-ready 中断（放调度器启动后，避免 200Hz ISR 在内核未起时冲击） */
-  /* 姿态外环：等 MPU6050 data-ready 中断（ISR 释放信号量）-> 读 -> 滤波 -> 融合 -> 外环PID -> VOFA
-     频率由传感器 INT（ATTITUDE_RATE_HZ）决定；osSemaphoreAcquire 带超时看门狗，
-     中断未配置/丢失时不永久阻塞。ISR 只 Give 信号量，业务全在此任务，符合 RTOS 铁律。 */
+#if APP_ENABLE_SENSOR
+
+  if (MPU6050_EnableInt() != 0) { printf("WARN: MPU6050 data-ready INT enable FAILED!\r\n"); }   /* 启动 data-ready 中断（放调度器后，避免 200Hz ISR 在内核未起时冲击） */
+  /* 姿态外环：等 data-ready 中断(ISR Give 信号量) -> 读 -> 滤波 -> 融合 -> 外环PID -> VOFA。
+   * 频率由传感器 INT(ATTITUDE_RATE_HZ) 定；acquire 带超时看门狗，中断丢失不永久阻塞。
+   * ISR 只 Give，业务全在此任务，符合 RTOS 铁律。 */
   int16_t ra[3], rg[3];
   ImuData_t imu;
   int32_t tgtA = 0, tgtB = 0;
   for (;;)
   {
+    task_heartbeat_kick(HB_SENSOR);   /* 存活探针放最前：acquire 超时 continue 时仍踢，避免误判冻结 */
     if (osSemaphoreAcquire(g_semAttitudeDataReadyHandle, 100U) != osOK) {
         continue;                       /* 超时：跳过本拍，不阻塞 */
     }
@@ -498,44 +540,66 @@ void StartSensorTask(void *argument)
     Attitude_GetTargets(&tgtA, &tgtB);
     Dbg_Telemetry_Send(&imu, Attitude_Get(), tgtA, tgtB);
   }
+#endif /* APP_ENABLE_SENSOR */
+  osThreadTerminate(osThreadGetId());   /* 模块未使能：任务自删(CMSIS-RTOS2 API)，永不返回 */
   /* USER CODE END StartSensorTask */
 }
 
 /* USER CODE BEGIN Header_StartScreenTask */
 /**
-* @brief Function implementing the Task_Screen thread.
-* @param argument: Not used
-* @retval None
-*/
+  * @brief  Function implementing the Task_Screen thread.
+  * @param  argument: Not used
+  * @retval None
+  */
 /* USER CODE END Header_StartScreenTask */
 void StartScreenTask(void *argument)
 {
   /* USER CODE BEGIN StartScreenTask */
-	
-//	W25QXX_Test();
+#if APP_ENABLE_SCREEN
+
   /* Infinite loop */
   for(;;)
   {
+    task_heartbeat_kick(HB_SCREEN);   /* 运行期存活探针：TIM7 ISR 据此判 IWDG 是否喂 */
     osDelay(1000);
   }
+#endif /* APP_ENABLE_SCREEN */
+  osThreadTerminate(osThreadGetId());   /* 模块未使能：任务自删(CMSIS-RTOS2 API)，永不返回 */
   /* USER CODE END StartScreenTask */
 }
 
 /* USER CODE BEGIN Header_StartFlashTask */
 /**
-* @brief Function implementing the Task_Flash thread.
-* @param argument: Not used
-* @retval None
-*/
+  * @brief  Function implementing the Task_Flash thread.
+  * @param  argument: Not used
+  * @retval None
+  */
 /* USER CODE END Header_StartFlashTask */
 void StartFlashTask(void *argument)
 {
   /* USER CODE BEGIN StartFlashTask */
+#if APP_ENABLE_FLASH
+
+  /* 一次性上电自检：验证 40MHz SCK 下 W25Q64 读写稳定（改时钟树后必跑）。
+   * 打印用 #ifdef LOG_ENABLED 包裹：生产模式(注释 LOG_ENABLED)变空，开发期正常；
+   * 不走 per-task 开关（自检只跑一次）。 */
+  int test_ret = W25QXX_Test();
+#ifdef LOG_ENABLED
+  if (test_ret != 0) {
+    printf("[FLASH] W25Q64 self-test FAILED (ret=%d), see W25Q TEST log\r\n", test_ret);
+  } else {
+    printf("[FLASH] W25Q64 self-test PASSED\r\n");
+  }
+#endif
+
   /* Infinite loop */
   for(;;)
   {
+    task_heartbeat_kick(HB_FLASH);   /* 运行期存活探针：TIM7 ISR 据此判 IWDG 是否喂 */
     osDelay(1);
   }
+#endif /* APP_ENABLE_FLASH */
+  osThreadTerminate(osThreadGetId());   /* 模块未使能：任务自删(CMSIS-RTOS2 API)，永不返回 */
   /* USER CODE END StartFlashTask */
 }
 
@@ -546,15 +610,12 @@ void StartFlashTask(void *argument)
 * @retval None
 */
 /* ===========================================================================
- * 日志后台任务 = CubeMX 原生 Task_logger（Entry Function = StartLoggerTask）。
- *   - 函数体位于 CubeMX 生成的 "USER CODE BEGIN StartLoggerTask" stub（freertos.c:521），
- *     CubeMX 重新生成时自动保留，无需手写。
- *   - 任务声明与 osThreadNew 调用也由 CubeMX 生成（freertos.c:164 / :233）。
- * 历史：早期曾把函数体写在生成主体外（USER CODE 块），重生时被冲掉，
- *       链接器报 "L6218E: Undefined symbol StartLoggerTask"；现已整体归 CubeMX 管理，问题消失。
- * 职责：低优先级循环，把 logger 环形缓冲异步刷到串口（logger_drain）。
- *       生产任务只做"格式化+入缓冲"，不阻塞，实时性不受 printf 影响。
- *       logger_init() 已在 MX_FREERTOS_Init 的 USER CODE BEGIN Init 调用。
+ * 日志后台任务 = CubeMX 原生 Task_logger（Entry = StartLoggerTask）。
+ *   - 函数体/声明/osThreadNew 均 CubeMX 生成，重生成自动保留，无需手写。
+ * 职责：低优先级循环 -> logger_drain 异步刷环形缓冲到串口；
+ *       常驻 DbgConsole_Process（debug<n>/姿态/电机命令，不随 APP_ENABLE_X 失效）。
+ * 生产任务仅 格式化+入缓冲，不阻塞，实时性不受 printf 影响。
+ * logger_init() 已在 MX_FREERTOS_Init 的 Init 块调用。
  * =========================================================================== */
 /* USER CODE END Header_StartLoggerTask */
 void StartLoggerTask(void *argument)
@@ -562,27 +623,85 @@ void StartLoggerTask(void *argument)
   /* USER CODE BEGIN StartLoggerTask */
   (void)argument;
   for (;;) {
-      logger_drain();    /* 阻塞刷环形缓冲（跑在低优先级任务里，不抢占控制环） */
-      osDelay(2);        /* 释放 CPU，让高优先级任务（Motor/Inference）先跑 */
+      logger_drain();        /* 阻塞刷环形缓冲（跑在低优先级任务里，不抢占控制环） */
+      DbgConsole_Process();  /* 调试命令控制台：常驻，不随任何业务模块开关（APP_ENABLE_X）失效 */
+      /* 喂狗点已迁 TIM7_IRQHandler(ISR, NVIC prio3)：运行期每 500ms 经
+         watchdog_should_feed() 喂；POST 期由各 Xxx_Test 协作喂(selftest.c log_wdt_feed())。
+         本任务不喂狗——杜绝"最低优先级喂狗被忙等饿死 → IWDG 复位环"反模式。 */
+      osDelay(2);            /* 释放 CPU，让高优先级任务（Motor/Inference）先跑 */
   }
   /* USER CODE END StartLoggerTask */
+}
+
+/* USER CODE BEGIN Header_StartEsp32S3Task */
+/**
+  * @brief  Function implementing the Task_Esp32S3 thread.
+  * @param  argument: Not used
+  * @retval None
+  */
+/* USER CODE END Header_StartEsp32S3Task */
+void StartEsp32S3Task(void *argument)
+{
+  /* USER CODE BEGIN StartEsp32S3Task */
+#if APP_ENABLE_ESP32S3
+
+  /* CubeMX owns the task; implementation lives in BSP (esp32s3.c).
+     ESP32S3_Task_Run starts USART6 RX and drains g_ImgResultImg_qHandle. */
+  ESP32S3_Task_Run(argument);
+#endif /* APP_ENABLE_ESP32S3 */
+  osThreadTerminate(osThreadGetId());   /* 模块未使能：任务自删(CMSIS-RTOS2 API)，永不返回 */
+  /* USER CODE END StartEsp32S3Task */
+}
+
+/* USER CODE BEGIN Header_StartTestTask */
+/**
+* @brief Function implementing the Task_Test thread.
+* @param argument: Not used
+* @retval None
+*/
+/* USER CODE END Header_StartTestTask */
+void StartTestTask(void *argument)
+{
+  /* USER CODE BEGIN StartTestTask */
+  (void)argument;
+
+  /* 开发期定位：打 __FILE__:__LINE__ 确认 Task_Test 已调度进此函数体。 */
+  LOG_I("TEST", "StartTestTask ENTER @ %s:%d", __FILE__, __LINE__);
+
+  /* 上电一站式自检(POST)：Flash→Inference→Sensor→Esp32S3→Motor→Network→Screen。
+     关键失败→存档+复位；非关键→打印+继续。长段(ML推理)内部自喂狗。 */
+  Selftest_RunAll();
+
+  /* 栈高水位测量：供定 Task_Test 栈大小（osThreadGetStackSpace 返未用栈最小值）。 */
+  uint32_t free_b  = osThreadGetStackSpace(osThreadGetId());
+  uint32_t total_b = Task_Test_attributes.stack_size;   /* = 2048*4 = 8192 字节（CubeMX 配置） */
+  uint32_t used_b  = (total_b > free_b) ? (total_b - free_b) : 0U;
+  LOG_I("TEST", "Task_Test stack: used=%lu/%lu bytes (free=%lu)  -> 建议 final stack ≈ %lu",
+        used_b, total_b, free_b, used_b + 256U);
+
+  osThreadTerminate(osThreadGetId());   /* 跑完自删当前任务：CMSIS 自删必须传有效句柄，
+                                           NULL 被当参数错丢弃(见 cmsis_os2.c:845 hTask==NULL→osErrorParameter)，
+                                           故不能用 osThreadTerminate(NULL)；等价裸写法 vTaskDelete(NULL) */
+  /* USER CODE END StartTestTask */
 }
 
 /* Private application code --------------------------------------------------*/
 /* USER CODE BEGIN Application */
 
-/* 帧接收回调：覆盖 BSP_USART.c 的 __weak 默认实现。
-   运行于 ISR 上下文（USART1_IDLE 中断），只把整帧拷入本地缓冲并推入
-   CubeMX 生成的 g_cmd_qHandle 队列；命令解析与回显留给 StartMotorTask，
-   严格符合参考范式"ISR 只 Send/Give，不碰业务"。
-   USART1_IRQn 优先级=8 ≥ configLIBRARY_MAX_SYSCALL_INTERRUPT_PRIORITY(5)，
-   故 osMessageQueuePut 在 ISR 中调用合法；队满(4 槽)则丢弃，不阻塞中断。 */
-void BSP_UART1_OnFrame(const uint8_t *data, uint16_t len)
+/* 帧接收回调：覆盖 BSP_LOG.c 的 __weak 默认。
+   运行于 ISR(USART1_IDLE)：整帧拷本地缓冲并推 g_cmd_qHandle；
+   解析/回显留 StartLoggerTask，符合"ISR 只 Send/Give，不碰业务"。
+   USART1_IRQn prio=8 ≥ configLIBRARY_MAX_SYSCALL_INTERRUPT_PRIORITY(5)，
+   故 ISR 内 osMessageQueuePut 合法；队满(4 槽)丢弃，不阻塞中断。 */
+
+volatile uint32_t g_dbg_onframe_hits= 0U;  /* OnFrame 被调用次数 */
+void BSP_LOG_UART1_OnFrame(const uint8_t *data, uint16_t len)
 {
     if (len == 0U || len > 31U) return;          /* 越界保护，队列 ItemSize=32(含'\0') */
     char item[32];
     for (uint16_t i = 0U; i < len; i++) item[i] = (char)data[i];
     item[len] = '\0';
+		g_dbg_onframe_hits++;
     osMessageQueuePut(g_cmd_qHandle, item, 0U, 0U);   /* ISR 安全，非阻塞 */
 }
 

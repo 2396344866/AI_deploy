@@ -1,0 +1,68 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 680 460" font-family="'Segoe UI',Arial,sans-serif" font-size="13">
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L8,3 L0,6 Z" fill="#374151"/>
+    </marker>
+    <style>
+      .box   { fill:#ffffff; stroke:#374151; stroke-width:1.5; rx:8; }
+      .title { fill:#111827; font-weight:700; font-size:14px; }
+      .sub   { fill:#6b7280; font-size:11px; }
+      .hub   { fill:#1e3a8a; stroke:#1e40af; }
+      .hubtx { fill:#ffffff; font-weight:700; }
+      .esp1  { fill:#fef3c7; stroke:#d97706; }
+      .esp2  { fill:#dcfce7; stroke:#16a34a; }
+      .log   { fill:#e0e7ff; stroke:#4f46e5; }
+      .task  { fill:#fce7f3; stroke:#db2777; }
+    </style>
+  </defs>
+
+  <!-- background -->
+  <rect x="0" y="0" width="680" height="460" fill="#f8fafc"/>
+
+  <!-- title -->
+  <text x="24" y="30" class="title">UART RX Routing (split by task, not "unified UART")</text>
+  <text x="24" y="48" class="sub">HAL_UARTEx_RxEventCallback is the only global weak symbol -&gt; the whole project can have only 1 strong def, so uart_rx_dispatcher.c dispatches centrally</text>
+
+  <!-- HAL single callback hub -->
+  <rect x="250" y="78" width="180" height="58" rx="8" class="box hub"/>
+  <text x="340" y="104" text-anchor="middle" class="hubtx">HAL_UARTEx_RxEventCallback</text>
+  <text x="340" y="122" text-anchor="middle" class="hubtx" font-size="11">(uart_rx_dispatcher.c - sole strong def)</text>
+
+  <!-- branch ESP32-S3 -->
+  <path d="M430,107 C500,107 500,150 540,150" fill="none" stroke="#374151" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <rect x="540" y="126" width="120" height="48" rx="8" class="esp2"/>
+  <text x="600" y="146" text-anchor="middle" font-weight="700">ESP32S3_UART_RxCallback</text>
+  <text x="600" y="162" text-anchor="middle" class="sub">huart == &amp;huart6 (USART6)</text>
+
+  <!-- branch ESP-01S -->
+  <path d="M250,107 C180,107 180,150 140,150" fill="none" stroke="#374151" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <rect x="20" y="126" width="120" height="48" rx="8" class="esp1"/>
+  <text x="80" y="146" text-anchor="middle" font-weight="700">ESP01S_UART_RxCallback</text>
+  <text x="80" y="162" text-anchor="middle" class="sub">huart == &amp;huart2 (USART2)</text>
+
+  <!-- tasks -->
+  <path d="M600,174 C600,200 600,214 600,222" fill="none" stroke="#16a34a" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <rect x="520" y="222" width="160" height="40" rx="8" class="task"/>
+  <text x="600" y="246" text-anchor="middle" font-weight="700">StartEsp32S3Task</text>
+  <text x="600" y="262" text-anchor="middle" class="sub">Image result frame (921600)</text>
+
+  <path d="M80,174 C80,200 80,214 80,222" fill="none" stroke="#d97706" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <rect x="0" y="222" width="160" height="40" rx="8" class="task"/>
+  <text x="80" y="246" text-anchor="middle" font-weight="700">StartNetworkTask</text>
+  <text x="80" y="262" text-anchor="middle" class="sub">MQTT / Aliyun uplink (115200)</text>
+
+  <!-- LOG / USART1 separate path -->
+  <line x1="250" y1="78" x2="250" y1="60" stroke="#9ca3af" stroke-width="1" stroke-dasharray="3,3"/>
+  <rect x="380" y="300" width="280" height="60" rx="8" class="log"/>
+  <text x="520" y="324" text-anchor="middle" font-weight="700">LOG (BSP_LOG.c - USART1 PA9/10)</text>
+  <text x="520" y="342" text-anchor="middle" class="sub">HAL_UARTEx_ReceiveToIdle_DMA -&gt; RxEventCallback -&gt; BSP_LOG_UART1_OnRxEvent</text>
+  <text x="520" y="356" text-anchor="middle" class="sub">Frame into g_cmd_qHandle -&gt; StartLoggerTask / DbgConsole_Process (debug console / VOFA+)</text>
+
+  <path d="M520,360 C520,388 500,392 470,392" fill="none" stroke="#4f46e5" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <rect x="330" y="372" width="140" height="40" rx="8" class="task"/>
+  <text x="400" y="396" text-anchor="middle" font-weight="700">StartLoggerTask</text>
+  <text x="400" y="412" text-anchor="middle" class="sub">DbgConsole_Process: command parse / echo</text>
+
+  <!-- legend -->
+  <text x="24" y="430" class="sub">Note: dispatcher has no business logic, only switch(huart) routing; three UARTs are decoupled. USART1(LOG) uses a separate callback HAL_UART_RxCpltCallback, unrelated to dispatcher.</text>
+</svg>

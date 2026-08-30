@@ -91,11 +91,19 @@ float   Attitude_GetRawRoll(void);   /* 后滤波前欧拉角（Madgwick 直出�
 float   Attitude_GetRawPitch(void);
 float   Attitude_GetRawYaw(void);
 
-/* 磁力计 getter（阶段1 9轴，供 VOFA CH37-43）：raw=原始计数，calib=减硬铁偏移后，
-   heading=atan2 磁航向(deg)。阶段1 未标定，calib 等价 raw。 */
+/* 磁力计 getter（9 轴，供 VOFA CH37-43）：
+   raw=原始计数；calib=轴系对齐(§1.1)后减硬铁偏移（阶段1 offset=0 等价透传）；
+   heading=倾角补偿罗盘(§1.2)航向(deg)，稳定可观测；raw_heading=水平 atan2（调试对比）。 */
 void    Attitude_GetRawMag(int16_t mag[3]);
 void    Attitude_GetCalibMag(float mag[3]);
-float   Attitude_GetMagHeading(void);
+float   Attitude_GetMagHeading(void);      /* 倾角补偿后磁航向(deg)，同 CH43 */
+float   Attitude_GetRawMagHeading(void);   /* 水平 atan2 磁航向(deg)，未做倾角补偿，供对比 */
 int     Attitude_MagInit(void);       /* 运行时重探测 QMC5883L（M init 命令调用） */
+
+/* §1.1 轴系对齐：GY273 与 MPU6050 是两块独立小板，朝向大概率不一致。
+   用安装欧拉角(deg)把磁力计芯片原生系旋到 IMU body 系再融合。
+   默认 0 = 假设两板平行同向；若绕某轴偏角，调这三个值（M align 命令运行期生效）。 */
+void    Attitude_SetMagAlign(float yaw_deg, float pitch_deg, float roll_deg);
+void    Attitude_GetMagAlign(float *yaw_deg, float *pitch_deg, float *roll_deg);
 
 #endif /* _ATTITUDE_H */

@@ -24,6 +24,11 @@ static int I2C_WriteReg(uint8_t reg, uint8_t val)
                 reg, I2C_MEMADD_SIZE_8BIT, &val, 1, MPU_I2C_TIMEOUT) == HAL_OK) {
             return 0;
         }
+        /* 打印 HAL 错误码定位 Init FAILED 真因（走 logger，受 LOG_ENABLED + 级别闸门）：
+           0x04=HAL_I2C_ERROR_AF(NACK，地址/接线/未应答)；0x20=TIMEOUT(总线卡死 SCL/SDA 被拉)；
+           0x01=BERR(起始条件冲突)；0x02=ARLO(仲裁丢失)。仅在真实 I2C 失败时触发，正常态零噪音。 */
+        LOG_W("MPU", "I2C WR fail reg=0x%02X err=0x%lX (retry %d/%d)",
+              (unsigned)reg, (unsigned long)hi2c1.ErrorCode, i, MPU_I2C_RECOVERY_RETRIES);
         MPU6050_I2C_BusRecovery();
     }
     return -1;
@@ -36,6 +41,8 @@ static int I2C_ReadReg(uint8_t reg, uint8_t *val)
                 reg, I2C_MEMADD_SIZE_8BIT, val, 1, MPU_I2C_TIMEOUT) == HAL_OK) {
             return 0;
         }
+        LOG_W("MPU", "I2C RD fail reg=0x%02X err=0x%lX (retry %d/%d)",
+              (unsigned)reg, (unsigned long)hi2c1.ErrorCode, i, MPU_I2C_RECOVERY_RETRIES);
         MPU6050_I2C_BusRecovery();
     }
     return -1;

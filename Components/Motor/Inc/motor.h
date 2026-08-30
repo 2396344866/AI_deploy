@@ -115,7 +115,7 @@ void     Motor_SetPosition(MotorID id, int32_t pos);  /* 位置模式目标 */
 void     Motor_EmergencyStop(void);                    /* 刹车并停机 */
 void     Motor_Resume(void);                            /* 解除刹车，恢复运行 */
 
-/* 串口命令解析（由 BSP_USART 的 OnFrame 帧回调调用）
+/* 串口命令解析（由 BSP_LOG 的 OnFrame 帧回调调用）
    协议：A<速度> 设电机A目标(速度模式)  B<速度> 设电机B目标
          S 急停(刹车)  R 恢复运行 */
 void     Motor_ProcessCommand(const char *cmd, uint16_t len);

@@ -28,8 +28,8 @@ int  UWB_Trilaterate2D(const Point2D* anchors, const float* d, Point2D* out);
 
 ## 3. 移植步骤（H743 + FreeRTOS）
 
-1. **UART 分配**：在 CubeMX 选一个空闲 UART（如 USART2 / UART4），波特率与 BU03 固件一致（RCT6 用 `UWB_USART_BAUD`）。生成后对接 AI_deploy 已有的 `BSP_USART`（UART + DMA + 空闲中断接收）。
-2. **bsp_uwb 适配**：把 `BSP_USART_Init / SendString / Read` 换成 AI_deploy 的 `BSP_USART` API；去掉 `#include "stm32f10x.h"`，改为工程公共头。
+1. **UART 分配**：在 CubeMX 选一个空闲 UART（如 USART2 / UART4），波特率与 BU03 固件一致（RCT6 用 `UWB_USART_BAUD`）。生成后对接 AI_deploy 已有的 `BSP_LOG`（UART + DMA + 空闲中断接收）。
+2. **bsp_uwb 适配**：把 `BSP_LOG_Init / SendString / Read` 换成 AI_deploy 的 `BSP_LOG` API；去掉 `#include "stm32f10x.h"`，改为工程公共头。
 3. **uwb_2d 直搬**：`uwb_2d.c/.h` 不依赖 MCU 外设，仅 `#include <math.h>`；新建 `Components/UWB/Inc|Src` 放入即可，无需改写算法。
 4. **uwb_task 接入**：
    - 新建 `Components/UWB/Src/uwb_task.c`，周期（如 `UWB_PERIOD_MS = 200`）向 3 基站发起测距；

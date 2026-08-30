@@ -1264,12 +1264,12 @@ ARM Macro Assembler    Page 20
   609 0000001C                 END
               00000000 
               00000000 
-Command Line: --debug --xref --diag_suppress=9931,A1950W --cpu=Cortex-M7.fp.dp 
---depend=stm32h743vit6\startup_stm32h743xx.d -ostm32h743vit6\startup_stm32h743x
-x.o -I../Middlewares/ST/ARM/DSP/Inc -I.\RTE\_STM32H743VIT6 -ID:\Keil_v5\ARM\PAC
-K\ARM\CMSIS\6.1.0\CMSIS\Core\Include --predefine="__MICROLIB SETA 1" --predefin
-e="__UVISION_VERSION SETA 542" --predefine="STM32H743xx SETA 1" --predefine="_R
-TE_ SETA 1" --list=startup_stm32h743xx.lst startup_stm32h743xx.s
+Command Line: --debug --xref --diag_suppress=A1950W --cpu=Cortex-M7.fp.dp --dep
+end=.\stm32h743vit6\startup_stm32h743xx.d -o.\stm32h743vit6\startup_stm32h743xx
+.o -I../Drivers/CMSIS/Include -I.\RTE\_STM32H743VIT6 -ID:\Keil_v5\ARM\PACK\ARM\
+CMSIS\6.1.0\CMSIS\Core\Include --predefine="__MICROLIB SETA 1" --predefine="__U
+VISION_VERSION SETA 542" --predefine="STM32H743xx SETA 1" --predefine="_RTE_ SE
+TA 1" --list=startup_stm32h743xx.lst startup_stm32h743xx.s
 
 
 

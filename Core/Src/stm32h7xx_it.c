@@ -23,9 +23,12 @@
 #include "stm32h7xx_it.h"
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-#include "BSP_USART.h" 
+#include "BSP_LOG.h" 
 #include "logger.h"    // 日志黑匣子：HardFault 中刷新最近日志到 Flash
 #include "cmsis_os2.h" // 供 ISR 内 osSemaphoreRelease（CMSIS-RTOS V2，ISR 安全）
+#include "dbg_config.h" // 调试开关集中管理（DEBUG_ISR_CNT_* 等）
+#include "watchdog_heartbeat.h"  // 看门狗心跳：g_wdt_tick_cnt / watchdog_should_feed
+#include "iwdg.h"                // hiwdg1 句柄（HAL_IWDG_Refresh）
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -69,10 +72,10 @@ extern DMA_HandleTypeDef hdma_uart4_tx;
 extern DMA_HandleTypeDef hdma_usart1_rx;
 extern UART_HandleTypeDef huart4;
 extern UART_HandleTypeDef huart1;
+extern UART_HandleTypeDef huart6;
 extern TIM_HandleTypeDef htim6;
 
 /* USER CODE BEGIN EV */
-void BSP_UART1_IdleHandler(void);   /* USART1 DMA+IDLE：由 BSP_USART.c 实现 */
 void Motor_1ms_Handler(void);       /* TIM7 1ms 控制环：由 Components/Motor 实现 */
 extern osSemaphoreId_t g_semAttitudeDataReadyHandle;  /* CubeMX 生成（二值信号量） */
 extern osSemaphoreId_t g_semScreenUpdateHandle;       /* 淘晶驰屏数据到达：ISR 释放，Task_Screen 获取 */
@@ -111,13 +114,33 @@ void HardFault_Handler(void)
        （不依赖 RTOS/HAL 状态，故障上下文安全）。 */
     {
         extern void log_backend_putc(char c);
+        /* 异常入栈帧(硬件压入异常栈): r0,r1,r2,r3,r12,lr,pc,xPSR */
+        uint32_t lr_exc;
+        __asm volatile ("mov %0, lr" : "=r" (lr_exc));   /* CMSIS 无 __get_LR，内联汇编读 R14 */
+        uint32_t *sp = (lr_exc & 0x4U) ? (uint32_t *)__get_PSP() : (uint32_t *)__get_MSP();
+        uint32_t exc_pc = sp[6];
+        uint32_t exc_lr = sp[5];
         const char *hf = "\r\n*** HARD FAULT *** system halted\r\n";
         for (const char *p = hf; *p; p++) log_backend_putc(*p);
+        /* 打印故障指令地址(ip)与异常返回 lr，定位是哪一行触发的 HardFault */
+        const char *head = "ip=";
+        for (const char *p = head; *p; p++) log_backend_putc(*p);
+        for (int s = 28; s >= 0; s -= 4) {
+            uint8_t n = (uint8_t)((exc_pc >> s) & 0xFU);
+            log_backend_putc(n < 10U ? (char)('0' + n) : (char)('A' + n - 10U));
+        }
+        log_backend_putc(' ');
+        head = "lr=";
+        for (const char *p = head; *p; p++) log_backend_putc(*p);
+        for (int s = 28; s >= 0; s -= 4) {
+            uint8_t n = (uint8_t)((exc_lr >> s) & 0xFU);
+            log_backend_putc(n < 10U ? (char)('0' + n) : (char)('A' + n - 10U));
+        }
+        log_backend_putc('\r'); log_backend_putc('\n');
     }
     /* 崩溃黑匣子：尽力把最近日志刷入 Flash（轮询写，不依赖 RTOS/DMA）。
        面试叙述对应：进入 HardFault 后，应先让设备平稳关闭
-       （如电机停转、状态 LED 指示），再在此 while(1) 原地等待 J-Link 接入取证。
-       HardFaultLab 实验触发后也会落到这里。 */
+       （如电机停转、状态 LED 指示），再在此 while(1) 原地等待 J-Link 接入取证。 */
     logger_flush_to_flash();
     /* USER CODE END W1_HardFault_IRQn 0 */
   }
@@ -292,7 +315,7 @@ void SPI1_IRQHandler(void)
 void USART1_IRQHandler(void)
 {
   /* USER CODE BEGIN USART1_IRQn 0 */
-  BSP_UART1_IdleHandler();   /* DMA + 空闲中断：取一帧交给回调，再重启 DMA */
+
   /* USER CODE END USART1_IRQn 0 */
   HAL_UART_IRQHandler(&huart1);
   /* USER CODE BEGIN USART1_IRQn 1 */
@@ -354,7 +377,26 @@ void TIM6_DAC_IRQHandler(void)
 void TIM7_IRQHandler(void)
 {
   /* USER CODE BEGIN TIM7_IRQn 0 */
+#if defined(APP_ENABLE_MOTOR) && APP_ENABLE_MOTOR
   Motor_1ms_Handler();   /* 1ms 控制节拍：读编码器 -> 速度/位置 PI -> 输出 PWM */
+#endif
+
+  /* 看门狗心跳喂狗（工业级策略，详见 watchdog_heartbeat.h）：
+     - g_wdt_tick_cnt 每 1ms 自增，供 task_heartbeat_kick 打时间戳。
+     - POST 期间 watchdog_arm() 未调 -> watchdog_should_feed() 返回 0 -> 不喂；
+       由 POST 测试代码 log_wdt_feed() 协作式喂（卡死测试->IWDG 抓到，慢测试活过）。
+     - POST 收尾 watchdog_arm() 后 -> 每 500ms 经 watchdog_should_feed() 检查：
+       所有被监视任务(APP_ENABLE_X!=0)心跳新鲜才喂；任一冻结->不喂->IWDG 复位。
+     独占 TIM7 中断（落在 TIM7_IRQHandler USER CODE 块），
+     不再占用 HAL_TIM_PeriodElapsedCallback 共享弱回调，规避 multiple-definition 地雷。 */
+  g_wdt_tick_cnt++;
+  static uint32_t wdt_feed_ticks = 0U;
+  if (++wdt_feed_ticks >= 500U) {
+      wdt_feed_ticks = 0U;
+      if (watchdog_should_feed()) {
+          HAL_IWDG_Refresh(&hiwdg1);
+      }
+  }
   /* USER CODE END TIM7_IRQn 0 */
   HAL_TIM_IRQHandler(&htim7);
   /* USER CODE BEGIN TIM7_IRQn 1 */
@@ -362,14 +404,36 @@ void TIM7_IRQHandler(void)
   /* USER CODE END TIM7_IRQn 1 */
 }
 
+/**
+  * @brief This function handles USART6 global interrupt.
+  */
+void USART6_IRQHandler(void)
+{
+  /* USER CODE BEGIN USART6_IRQn 0 */
+
+  /* USER CODE END USART6_IRQn 0 */
+  HAL_UART_IRQHandler(&huart6);
+  /* USER CODE BEGIN USART6_IRQn 1 */
+
+  /* USER CODE END USART6_IRQn 1 */
+}
+
 /* USER CODE BEGIN 1 */
 
 /* MPU6050 data-ready 中断（INT 脚 -> EXTI，CubeMX 生成 EXTIx_IRQHandler 并调用本回调）。
    运行于 ISR 上下文：严格只做"Give"动作（释放信号量唤醒 Task_Sensor），
    不碰任何业务/耗时操作，符合 RTOS 铁律。EXTI 优先级数值已设 ≥5（建议 6）。 */
+#if DEBUG_ISR_CNT_MPU6050_INT
+volatile uint32_t g_int_cnt = 0;   /* 仅调试期观察 data-ready 中断频率，发布版不编译 */
+#endif
+
 void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
 {
+
     if (GPIO_Pin == MPU6050_INT_Pin) {
+#if DEBUG_ISR_CNT_MPU6050_INT
+        g_int_cnt++;
+#endif
         osSemaphoreRelease(g_semAttitudeDataReadyHandle);
     }
 }

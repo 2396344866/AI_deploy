@@ -17,7 +17,7 @@
  *   DBG_UART_BAUD 覆盖式重设，详见 Components/Debug/README.md。
  * ============================================================================= */
 
-/* 启动时调用一次：用 DBG_UART_BAUD 重设 UART1 波特率（须在 BSP_UART1_RxStart 之前）。 */
+/* 启动时调用一次：用 DBG_UART_BAUD 重设 UART1 波特率（须在 BSP_LOG_UART1_RxStart 之前）。 */
 void Dbg_Telemetry_Init(void);
 
 /* 每拍调用：构建并发送一帧固定宽度 firewater。参数与 Vofa_Send 一致。 */

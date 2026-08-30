@@ -88,7 +88,7 @@ IMU 零位与机械"期望姿态"之间常有固定偏角，用参考角补偿�
 * 倾斜停止后：角度稳定，陀螺仪通道（**CH 9~11**）角速度在静止时必须回归到 $0^\circ/\text{s}$ 附近（零偏正常）。
 
 
-在波特率为 921600 时： #define DBG_TELEMETRY_DECIMATE 1  此时实际发送周期：5 ms（对应发送频率为 200 Hz）
+在波特率为 921600 时： #define DBG_TELEMETRY_DECIMATE 8  此时实际发送周期：40 ms（对应发送频率为 25 Hz）
 
 $$T_{\text{send}} = T_{\text{base}} \times \text{DBG\_TELEMETRY\_DECIMATE} = 5\text{ ms} \times \text{DBG\_TELEMETRY\_DECIMATE}$$
 

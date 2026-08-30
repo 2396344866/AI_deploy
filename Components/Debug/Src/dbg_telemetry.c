@@ -8,19 +8,25 @@
 #include "dbg_telemetry.h"
 #include "motor.h"        /* Motor_GetSpeed / Motor_GetPWM / Motor_GetTargetSpeed / g_motor_sys */
 #include "attitude.h"      /* Attitude_Get* */
-#include "BSP_USART.h"    /* BSP_UART1_SendPoll */
+#include "BSP_LOG.h"    /* BSP_LOG_UART1_SendPoll */
 #include "usart.h"        /* huart1 (extern) */
+#include "logger.h"      /* logger_get_level() : 运行期遥测闸门（>=DEBUG 才发帧） */
 #include <string.h>       /* memset */
 #include <stdio.h>        /* snprintf */
-
-#ifndef DBG_TELEMETRY_ENABLE
-#define DBG_TELEMETRY_ENABLE  1
-#endif
 
 /* 一行最大长度：44 通道 × (最多 "%.3f," ≈ 8 字符) + 换行 + 余量 */
 #define DBG_LINE_MAX   (DBG_FRAME_N * 10 + 8)
 
-#if DBG_TELEMETRY_ENABLE
+/* 严格分层 AND（与文本日志同构，共用 LOG_ENABLED 总闸；任一层不满足 -> 空实现/不发包）：
+ *   1) LOG_ENABLED 定义            —— 日志框架总闸（生产模式注释掉即零开销关全部日志）
+ *   2) 任一遥测分组开              —— DBG_TELEMETRY_IMU/MOTOR/SYSTEM 各自独立 OR（不再依附 DBG_LOG_MOTOR）
+ *                                      （只看姿态 -> 仅开 IMU；只看电机环 -> 仅开 MOTOR；可任意组合）
+ *   3) DBG_TELEMETRY_ENABLE == 1   —— 遥测特征开关（代码编进固件）
+ *   4) logger_get_level() >= TRACE —— 运行期级别达 TRACE（最高冗长度；高吞吐波形属 TRACE 级）
+ *   故"彻底开启遥测 = LOG_ENABLED 定义 + 任一分组开 + DBG_TELEMETRY_ENABLE=1
+ *        + LOG_COMPILE_MAX_LEVEL>=TRACE + logger_set_level(TRACE)"，层层严格满足。
+ *   正常业务只取数值解算、不参与打印；遥测是深挖传感器/控制环数据(VOFA 波形)，默认全关、仅调试短时开启。 */
+	#if DBG_TELEMETRY_ENABLE && defined(LOG_ENABLED) && (DBG_TELEMETRY_IMU || DBG_TELEMETRY_MOTOR || DBG_TELEMETRY_SYSTEM)
 
 extern UART_HandleTypeDef huart1;
 
@@ -29,7 +35,7 @@ static uint32_t s_tick      = 0;
 static uint32_t s_last_ms   = 0;   /* 测传感器循环周期(ms) */
 
 /* ---------------------------------------------------------------------------
- * Dbg_Telemetry_Init：在 main.c 启动早期（BSP_UART1_RxStart 之前）调用，
+ * Dbg_Telemetry_Init：在 main.c 启动早期（BSP_LOG_UART1_RxStart 之前）调用，
  * 用 DBG_UART_BAUD 覆盖 CubeMX 默认 115200，免改 usart.c / 免重跑 CubeMX。
  * ------------------------------------------------------------------------- */
 void Dbg_Telemetry_Init(void)
@@ -47,6 +53,15 @@ void Dbg_Telemetry_Init(void)
 void Dbg_Telemetry_Send(const ImuData_t *imu, const Attitude_t *att,
                         int32_t tgtA, int32_t tgtB)
 {
+    /* 运行期闸门：遥测帧是 TRACE 级诊断数据（最高 200Hz 二进制流，会占满 UART1）。
+     * 仅当运行期级别 >= TRACE 才真正发帧；生产态（运行默认<=DEBUG）即便代码编进二进制也
+     * 不发包，UART1 留给文本日志/命令。现场看波形 -> logger_set_level(LOG_LVL_TRACE) 即开，
+     * 调回 DEBUG 即停，无需重烧。与文本日志共用同一个运行期旋钮。
+     * 注意：TRACE 须先编进二进制（LOG_COMPILE_MAX_LEVEL>=TRACE），否则永远不发。 */
+    if (logger_get_level() < LOG_LVL_TRACE) {
+        return;
+    }
+
     /* 降采样 */
     s_tick++;
     if ((DBG_TELEMETRY_DECIMATE > 1) &&
@@ -118,10 +133,10 @@ void Dbg_Telemetry_Send(const ImuData_t *imu, const Attitude_t *att,
                          (i == 0) ? "%.3f" : ",%.3f", s_frame[i]);
     }
     line[off++] = '\n';
-    BSP_UART1_SendPoll((const uint8_t *)line, (uint16_t)off);
+    BSP_LOG_UART1_SendPoll((const uint8_t *)line, (uint16_t)off);
 }
 
-#else /* DBG_TELEMETRY_ENABLE == 0：关闭，空实现，零运行时开销 */
+ #else /* 任一闸门不满足（LOG_ENABLED 未定义 / 三组分组全关 / DBG_TELEMETRY_ENABLE=0）：空实现，零运行时开销 */
 
 void Dbg_Telemetry_Init(void) { /* 空 */ }
 void Dbg_Telemetry_Send(const ImuData_t *imu, const Attitude_t *att,

@@ -5,13 +5,15 @@ STM32H743 + W25Q64 工业边缘 AI 故障诊断（铜磨矿）。DIV2IFSCN/DIT2I
 
 
 ## 文档导航
-logger.md | BSP_W25Q64.md | BSP_UART.md | Pinout.md |
-Deployment_Guide.md | UWB_BU03_移植指南.md 
+调试手册.md | BSP_W25Q64.md | BSP_UART.md | Pinout.md |
+Deployment_Guide.md | UWB_BU03_移植指南.md
+
+> 注意：`Deployment_Guide.md` 已创建，归档 STM32 故障诊断与 ESP32-S3 图像检测的部署方案及实测性能数据。
 
 
 ## 组件
 ```
-Components/BSP   板级驱动（BSP_W25Q64 / BSP_USART / BSP_GPIO）
+Components/BSP   板级驱动（BSP_W25Q64 / BSP_LOG / LED）
 Components/Logger 统一日志（分级/时间戳/标签/环形缓冲/Flash 黑匣子）
 Components/Motor 双电机闭环（TIM1 PWM + TIM3/4 编码 + TIM7 1ms 环）
 Components/AI    推理数据与权重

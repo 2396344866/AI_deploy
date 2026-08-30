@@ -16,6 +16,9 @@
 #ifndef RAD2DEG
 #define RAD2DEG   57.2957795f
 #endif
+#ifndef DEG2RAD
+#define DEG2RAD   0.0174532925f   /* ARM CLANG math.h 不默认定义 M_PI，用字面量规避 */
+#endif
 
 /* ---- 外环控制状态（默认保守增益，靠 VOFA / 命令 K 整定）---- */
 static uint8_t  g_enabled   = 0;
@@ -35,13 +38,31 @@ static uint8_t    s_euler_lag_en    = (uint8_t)EULER_FILTER_LAG_DEFAULT;
 static float      s_euler_lag_alpha = EULER_LAG_ALPHA_DEFAULT;
 static int32_t     g_last_tgtA = 0, g_last_tgtB = 0;
 
-/* ---- 磁力计状态（阶段1：原始采集 + 占位硬铁偏移；阶段2 做标定持久化）---- */
-static int16_t s_mag_raw[3]   = {0, 0, 0};   /* 原始计数（QMC5883L） */
-static float   s_mag_calib[3] = {0.0f, 0.0f, 0.0f}; /* 标定后（阶段1 = raw，未减偏移） */
-static float   s_mag_heading  = 0.0f;        /* 磁航向(deg)：atan2 计算 */
-/* 阶段2 硬铁偏移占位（默认 0；标定后填入，s_mag_calib = raw - offset） */
+/* ---- 磁力计状态（9 轴）：阶段1 原始采集 + 占位硬铁偏移；阶段2 做标定持久化 ---- */
+static int16_t s_mag_raw[3]   = {0, 0, 0};   /* 原始计数（芯片原生 X/Y/Z） */
+static float   s_mag_calib[3] = {0.0f, 0.0f, 0.0f}; /* 轴系对齐(§1.1)后减硬铁偏移（阶段1 offset=0 透传） */
+static float   s_mag_heading  = 0.0f;        /* 磁航向(deg)：倾角补偿罗盘(§1.2) */
+static float   s_mag_raw_heading = 0.0f;     /* 水平 atan2 磁航向(deg)：未做倾角补偿，供 VOFA/调试对比 */
+/* 硬铁偏移占位（默认 0；§1.3 标定后填入，s_mag_calib = align(raw) - offset） */
 static float   s_mag_offset[3] = {0.0f, 0.0f, 0.0f};
 static uint8_t s_mag_ready = 0;
+
+/* §1.1 轴系对齐：GY273 与 MPU6050 是两块独立小板，朝向大概率不一致。
+   用安装欧拉角(deg)把磁力计芯片原生系旋到 IMU body 系（标准安装：Z 向上、X 向前）。
+   默认 0 = 假设两板平行同向粘贴；若绕某轴偏角，调这三个值（M align 命令运行期生效）。
+   矩阵由安装欧拉角按 ZYX(Rz*Ry*Rx) 顺序生成，用户只需调 3 个数，不用碰 9 个矩阵元。 */
+#ifndef MAG_INSTALL_YAW_DEG
+#define MAG_INSTALL_YAW_DEG    0.0f
+#endif
+#ifndef MAG_INSTALL_PITCH_DEG
+#define MAG_INSTALL_PITCH_DEG  0.0f
+#endif
+#ifndef MAG_INSTALL_ROLL_DEG
+#define MAG_INSTALL_ROLL_DEG   0.0f
+#endif
+static float s_mag_align[3][3] = {{1,0,0},{0,1,0},{0,0,1}};
+static float s_mag_install_euler[3] = {MAG_INSTALL_YAW_DEG, MAG_INSTALL_PITCH_DEG, MAG_INSTALL_ROLL_DEG};
+static void Attitude_BuildMagAlign(void);   /* 由安装欧拉角重建 s_mag_align（前向声明） */
 static float       s_gyro_offset[3] = {0.0f, 0.0f, 0.0f};  /* 零偏校准(°/s)，Init 阶段计算 */
 static float       s_gyro_bias_est[3] = {0.0f, 0.0f, 0.0f}; /* 在线零偏估计(°/s)：静止时代偿陀螺缓慢漂移/坏值 */
 
@@ -111,13 +132,14 @@ int Attitude_Init(void)
     }
     Madgwick_Init((float)ATTITUDE_RATE_HZ);
     ImuFilter_Init();
+    Attitude_BuildMagAlign();   /* §1.1 由安装欧拉角构建磁力计轴系对齐矩阵 */
 
     /* 磁力计（GY-273/QMC5883L，阶段1 9轴）：Init 失败不致命，仅降级为 6 轴融合 */
     if (QMC5822_Init() == 0) {
         s_mag_ready = 1;
     } else {
         s_mag_ready = 0;
-        LOG_W("ATT", "QMC5883L init FAIL -> 9轴降级为 6轴（yaw 仍靠陀螺积分，会漂移）");
+        LOG_W("ATT", "QMC5883L init FAIL -> degrade 9-axis to 6-axis (yaw relies on gyro integration, will drift)");
     }
 
     /* 陀螺零偏标定（要求静置，否则拒绝；可用串口命令 C 在静置后重新标定） */
@@ -138,7 +160,7 @@ int Attitude_Init(void)
         const float inv = 1.0f / (float)good;
         for (int i = 0; i < 3; i++) ga[i] *= inv;
     }
-    LOG_I("ATT", "static accel(raw)=%.0f,%.0f,%.0f  (重力轴应≈±%d LSB)",
+    LOG_I("ATT", "static accel(raw)=%.0f,%.0f,%.0f  (gravity axis should be ~ +-%d LSB)",
           (double)ga[0], (double)ga[1], (double)ga[2], (int)MPU_ACCEL_LSB_PER_G);
     LOG_I("ATT", "attitude outer-loop ready (backend=%d rate=%uHz)",
           (int)ATTITUDE_BACKEND, (unsigned)ATTITUDE_RATE_HZ);
@@ -215,18 +237,31 @@ void Attitude_Update(const ImuData_t *imu)
         s_att.yaw   = s_att_raw.yaw;
     }
 
-    /* 4) 磁力计读取 + 航向（阶段1：原始采集，标定偏移暂为 0；阶段2 持久化后减偏移） */
+    /* 4) 磁力计读取 + 航向（§1.1 轴系对齐 + §1.2 倾角补偿罗盘） */
     if (s_mag_ready) {
         int16_t mr[3];
         if (QMC5822_ReadRaw(mr) == 0) {
             s_mag_raw[0] = mr[0]; s_mag_raw[1] = mr[1]; s_mag_raw[2] = mr[2];
-            /* 标定后 = raw - 硬铁偏移（阶段1 offset=0，等价透传） */
-            s_mag_calib[0] = (float)mr[0] - s_mag_offset[0];
-            s_mag_calib[1] = (float)mr[1] - s_mag_offset[1];
-            s_mag_calib[2] = (float)mr[2] - s_mag_offset[2];
-            /* 磁航向：水平放置时 heading = atan2(-my, mx)（QMC5883L 新坐标系）
-               这里只做原始 atan2，倾角补偿留阶段1 路线A 或 Madgwick MARG 融合。 */
-            s_mag_heading = atan2f(-s_mag_calib[1], s_mag_calib[0]) * RAD2DEG;
+            /* §1.1 轴系对齐：芯片原生系 -> IMU body 系（先旋转，再减 body 系硬铁偏移） */
+            float mb[3];
+            mb[0] = s_mag_align[0][0]*(float)mr[0] + s_mag_align[0][1]*(float)mr[1] + s_mag_align[0][2]*(float)mr[2];
+            mb[1] = s_mag_align[1][0]*(float)mr[0] + s_mag_align[1][1]*(float)mr[1] + s_mag_align[1][2]*(float)mr[2];
+            mb[2] = s_mag_align[2][0]*(float)mr[0] + s_mag_align[2][1]*(float)mr[1] + s_mag_align[2][2]*(float)mr[2];
+            /* 减硬铁偏移（阶段1 offset=0，等价透传） */
+            s_mag_calib[0] = mb[0] - s_mag_offset[0];
+            s_mag_calib[1] = mb[1] - s_mag_offset[1];
+            s_mag_calib[2] = mb[2] - s_mag_offset[2];
+            /* 水平 atan2（调试对比，无倾角补偿；QMC5883L 新坐标系：-my, mx） */
+            s_mag_raw_heading = atan2f(-s_mag_calib[1], s_mag_calib[0]) * RAD2DEG;
+            if (s_mag_raw_heading < 0.0f) s_mag_raw_heading += 360.0f;
+            /* §1.2 倾角补偿罗盘：用融合后的 pitch/roll（s_att_raw 无后滤波延迟）做 tilt 补偿，
+               消除倾斜时机标偏 90° 导致的航向误差。公式见待处理.md §1.2。 */
+            float pr = s_att_raw.pitch * DEG2RAD;
+            float rr = s_att_raw.roll  * DEG2RAD;
+            float mx2 = s_mag_calib[0]*cosf(pr) + s_mag_calib[2]*sinf(pr);
+            float my2 = s_mag_calib[0]*sinf(rr)*sinf(pr) + s_mag_calib[1]*cosf(rr)
+                      - s_mag_calib[2]*sinf(rr)*cosf(pr);
+            s_mag_heading = atan2f(-my2, mx2) * RAD2DEG;
             if (s_mag_heading < 0.0f) s_mag_heading += 360.0f;
         }
     }
@@ -294,7 +329,48 @@ void Attitude_GetCalibMag(float mag[3])
 {
     mag[0] = s_mag_calib[0]; mag[1] = s_mag_calib[1]; mag[2] = s_mag_calib[2];
 }
-float Attitude_GetMagHeading(void) { return s_mag_heading; }
+float Attitude_GetMagHeading(void)   { return s_mag_heading; }       /* 倾角补偿后磁航向(deg)，= CH43 */
+float Attitude_GetRawMagHeading(void) { return s_mag_raw_heading; }    /* 水平 atan2 磁航向(deg)，未补偿，供对比 */
+
+/* §1.2 倾角补偿罗盘主接口：返回经 tilt 补偿的磁航向(deg)，与 CH43 一致 */
+float Attitude_TiltCompassHeading(void) { return s_mag_heading; }
+
+/* §1.1 安装欧拉角设置：重建轴系对齐矩阵（运行期 M align 命令调用，不需重烧） */
+void Attitude_SetMagAlign(float yaw_deg, float pitch_deg, float roll_deg)
+{
+    s_mag_install_euler[0] = yaw_deg;
+    s_mag_install_euler[1] = pitch_deg;
+    s_mag_install_euler[2] = roll_deg;
+    Attitude_BuildMagAlign();
+    LOG_I("ATT", "mag align(y,p,r)=%.1f,%.1f,%.1f deg applied",
+          (double)yaw_deg, (double)pitch_deg, (double)roll_deg);
+}
+void Attitude_GetMagAlign(float *yaw_deg, float *pitch_deg, float *roll_deg)
+{
+    if (yaw_deg)   *yaw_deg   = s_mag_install_euler[0];
+    if (pitch_deg) *pitch_deg = s_mag_install_euler[1];
+    if (roll_deg)  *roll_deg  = s_mag_install_euler[2];
+}
+
+/* 由安装欧拉角(ZYX: Rz*Ry*Rx)重建磁力计轴系对齐矩阵 s_mag_align */
+static void Attitude_BuildMagAlign(void)
+{
+    float y = s_mag_install_euler[0] * 0.0174532925f;  /* deg->rad */
+    float p = s_mag_install_euler[1] * 0.0174532925f;
+    float r = s_mag_install_euler[2] * 0.0174532925f;
+    float cy = cosf(y), sy = sinf(y);
+    float cp = cosf(p), sp = sinf(p);
+    float cr = cosf(r), sr = sinf(r);
+    s_mag_align[0][0] = cy*cp;
+    s_mag_align[0][1] = cy*sp*sr - sy*cr;
+    s_mag_align[0][2] = cy*sp*cr + sy*sr;
+    s_mag_align[1][0] = sy*cp;
+    s_mag_align[1][1] = sy*sp*sr + cy*cr;
+    s_mag_align[1][2] = sy*sp*cr - cy*sr;
+    s_mag_align[2][0] = -sp;
+    s_mag_align[2][1] = cp*sr;
+    s_mag_align[2][2] = cp*cr;
+}
 
 /* 运行时重探测磁力计（M 命令调用；换模块/接线后不需重烧） */
 int Attitude_MagInit(void)
@@ -424,21 +500,39 @@ void Attitude_ProcessCommand(const char *cmd, uint16_t len)
             LOG_W("ATT", "F subcmd unknown: %s (use lag/trim/elag/print)", sub);
         }
     } else if (op == 'M') {
-        /* 磁力计诊断/重探测（阶段1 9轴）：
-             M        → 打印当前磁力计状态 + 一次 raw 采样（探测芯片是否在线/通信）
-             M init   → 重探测 QMC5883L（换模块/接线后不需重烧） */
+        /* 磁力计诊断/轴系对齐/重探测（9 轴）：
+             M                  → 打印状态 + 一次采样（tilt 补偿航向 vs 水平航向 对比 + 安装角）
+             M init             → 重探测 QMC5883L（换模块/接线后不需重烧）
+             M align <y>,<p>,<r> → 设安装欧拉角(deg)并重建对齐矩阵（绕竖轴偏调 yaw，
+                                    板贴反调 180；不需重烧） */
         const char *q = &cmd[1];
         while (*q == ' ' || *q == '\r' || *q == '\n') q++;
         if (strncmp(q, "init", 4) == 0) {
             int r = Attitude_MagInit();
             LOG_I("ATT", "mag re-init %s", (r == 0) ? "OK" : "FAIL (no ACK?)");
+        } else if (strncmp(q, "align", 5) == 0) {
+            const char *a = q + 5;
+            while (*a == ' ' || *a == ',') a++;
+            float v[3]; int n = 0;
+            const char *qq = a;
+            while (*qq && n < 3) {
+                char *end; float f = strtof(qq, &end);
+                if (end == qq) break;
+                v[n++] = f; qq = end;
+                while (*qq == ',' || *qq == ' ') qq++;
+            }
+            if (n >= 3) Attitude_SetMagAlign(v[0], v[1], v[2]);
+            else LOG_W("ATT", "M align needs 3 numbers: yaw,pitch,roll (deg)");
         }
         QMC5822_DumpStatus();
-        LOG_I("ATT", "mag ready=%u raw=%d,%d,%d calib=%.1f,%.1f,%.1f heading=%.1f deg",
+        LOG_I("ATT", "mag ready=%u raw=%d,%d,%d calib=%.1f,%.1f,%.1f",
               (unsigned)s_mag_ready,
               (int)s_mag_raw[0], (int)s_mag_raw[1], (int)s_mag_raw[2],
-              (double)s_mag_calib[0], (double)s_mag_calib[1], (double)s_mag_calib[2],
-              (double)s_mag_heading);
+              (double)s_mag_calib[0], (double)s_mag_calib[1], (double)s_mag_calib[2]);
+        LOG_I("ATT", "heading(tilt-comp)=%.1f | heading(raw,no-tilt)=%.1f | align(y,p,r)=%.1f,%.1f,%.1f deg",
+              (double)s_mag_heading, (double)s_mag_raw_heading,
+              (double)s_mag_install_euler[0], (double)s_mag_install_euler[1], (double)s_mag_install_euler[2]);
+        LOG_I("ATT", "verify: rotate board about Z 360deg -> tilt-comp heading should go 0->360 monotonic (no jump)");
     }
 }
 
