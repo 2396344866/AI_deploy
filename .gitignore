@@ -1,13 +1,76 @@
-# ===== 私有：AI 模型权重与测试数据（禁止公开）=====
-Components/AI/Inc/model_weights.h
-Components/AI/Inc/model_q_params.h
-Components/AI/Inc/test_dataset_raw.h
-Components/AI/Inc/test_dataset_processed.h
-Components/AI/Inc/model_weights_ext.h
-Components/AI/Inc/model_weights_q.h
-Components/AI/Inc/*.bak
-Components/AI/Inc/*.bak_*
-Components/AI/Inc/backup
+# ===== 私有：Fault_Diagnosis 模型权重与测试数据（禁止公开 数据集不合格 是random随机数生成 不是工业实测  仅仿真用）=====
+Components/Fault_Diagnosis/Inc/model_weights.h
+Components/Fault_Diagnosis/Inc/model_q_params.h
+Components/Fault_Diagnosis/Inc/test_dataset_raw.h
+Components/Fault_Diagnosis/Inc/test_dataset_processed.h
+Components/Fault_Diagnosis/Inc/model_weights_ext.h
+Components/Fault_Diagnosis/Inc/model_weights_q.h
+Components/Fault_Diagnosis/Inc/*.bak
+Components/Fault_Diagnosis/Inc/*.bak_*
+Components/Fault_Diagnosis/Inc/backup
+# ===== 被移除的示例头本地备份（非工程源）=====
+Components/Fault_Diagnosis/examples/
+# ===== 故障诊断测试数据（禁止公开 数据集不合格 是random随机数生成 不是工业实测  仅仿真用）=====
+Components/Fault_Diagnosis/backup
+
+# ===== 私有：凭据（真实 MQTT 密码派生值，禁止公开）=====
+secrets.h
+**/secrets.h
+
+# ===== 目标检测测试数据（禁止公开 数据集不合格 是random随机数生成 不是工业实测  仅仿真用）=====
+Components/Object_Detection/目标检测性能.md
+
+# ===== DEBUG 测试和辅助工具=====
+Components/Debug/Test
+Components/Debug/debug
+Components/Debug/Ref
+Components/Debug/Tools
+# Components/Debug 仅忽略调试产物（日志/临时文本），源文件与文档随工程公开
+Components/Debug/*.log
+Components/Debug/*.txt
+
+# ===== 软件测试验证功能PC端口（本机验证由于每个机器验证效果差别较大故不公开）=====
+ML/
+
+# ===== 生成的 HTML 文档=====
+*.html
+
+.workbuddy/
+.gitignore
+
+
+# ===== 程序参考文档（无需主要为操作手册 借鉴别人的为主）=====
+Doc/W25Q64/
+Doc/TT带编码电机/
+AI_deploy_开发规范与提示词.md
+# ===== 第三方手册 / 本地大文件（不公开）=====
+Doc/tjcwiki.pdf
+# ===== github上传指南是给我看的 =====
+Doc/GitHub上传指南.md
+
+
+# ===== Keil/ARM 编译产物（无需给出）=====
+*.crf
+*.htm
+*.dep
+*.lnp
+*.sct
+*.scvd
+*.uvguix.*
+*.uvoptx
+*.i
+*.__i
+
+# ===== 编辑器 / 操作系统（无需给出）=====
+.vscode/
+.idea/
+.DS_Store
+*.bak
+
+# ===== 调试日志 =====
+*.log
+*.txt
+
 
 # ===== 构建产物（无需公开 自己编译生成即可）=====
 *.o
@@ -23,66 +86,11 @@ Build/
 Objects/
 Listings/
 
-# ===== 核心测试数据（禁止公开）=====
-Components/AI/DOC_PRECISION_COMPARISON.md
-Components/AI/int8_precision_hw_results.csv
 
-# ===== 部分程序参考文档（无需主要为操作手册 借鉴别人的为主）=====
-Doc/W25Q64/
-Doc/TT带编码电机/
-.workbuddy/
-.gitignore
-
-# ===== github上传指南是给我看的 =====
-Doc/GitHub上传指南.md
-
-# ===== 软件测试验证功能PC端口（本机验证由于每个机器验证效果差别较大故不公开）=====
-ML/
-
-# ===== HardFaultLab模拟故障 用于故障诊断测试 而且仅仅为多级中断导致 =====
-Components/HardFaultLab/
-
-# ===== Keil/ARM 编译产物（无需给出）=====
-*.crf
-*.htm
-*.dep
-*.lnp
-*.sct
-*.scvd
-*.uvguix.*
-*.uvoptx
-
-# ===== 编辑器 / 操作系统（无需给出）=====
-.vscode/
-.idea/
-.DS_Store
-*.bak
-
-# ===== 调试日志 =====
-*.log
-*.txt
-
-# ===== AI编程提示词（用户或者AI查看 无需公开）=====
-基于RTOS架构-AI编程提示词.md
-
-# ===== 本地备份 / 调试产物（无需公开）=====
-Components/AI/backup/
-# Components/Debug 仅忽略调试产物（日志/临时文本），源文件与文档随工程公开
-Components/Debug/*.log
-Components/Debug/*.txt
-
-# ===== 第三方手册 / 本地大文件（不公开）=====
-Doc/tjcwiki.pdf
-
-# ===== 被移除的示例头本地备份（非工程源）=====
-Components/AI/examples/
-
-# ===== 由 md 生成的 HTML 文档（非源，可重新生成）=====
-Doc/**/*.html
 
 # ===== 编辑器 / 操作系统（兜底，避免误提交）=====
 .vscode/
 .idea/
 .DS_Store
 *.bak
-*.bak_*
+*.bak*
