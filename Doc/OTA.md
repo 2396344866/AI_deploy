@@ -1,9 +1,19 @@
-# OTA 无线升级方案（STM32H743 + ESP8266 AT + 阿里云 IoT）
+# OTA 无线升级方案（STM32H743 + ESP-01S AT + 阿里云 IoT）
 
 > 适用项目：`AI_deploy`（STM32H743VIT6，FreeRTOS，本地 AI 推理 + VOFA 串口遥测）  
 > 目标：在不插烧录器的情况下，远程给现场设备批量更新固件（含 INT8 模型 + EdgeImpulse 球磨机检测模型）  
 > 方案：**ESP-01S（MQTT AT 固件）+ 阿里云 IoT 平台 OTA + 自写 STM32 BootLoader + 双 APP 分区**  
 > 配套图：`h7_flash_layout.svg`（Flash 分区，含代码区/RW/ZI 标注）、`bootloader_flow.svg`（升级流程）
+
+### 修订记录
+
+| 日期 | 变更 |
+|---|---|
+| 2026-09-03 | ① §3 分区表修正：原 APP2=`0x080C0000` 与 APP1 **重叠 384 KB**（`0x080C0000` 实为 S6 起点），`VECT_TAB_OFFSET` 同步错，改为 Bank 对齐的 `0x08100000`；② 下载职责**定死为「APP 下载、BootLoader 只校验/跳转」**（原 §4 与 §5.2/§5.3 自相矛盾）；③ OTA 缓冲由 W25Q64 改为**内部 Flash 双 bank 边下边烧**；④ 新增 §10 看门狗跨阶段方案、§11 与 Route C 的接口约定；⑤ 新增易错 10–14 |
+
+> **体量基准（实测，非估算）**：`MDK-ARM/STM32H743VIT6/STM32H743VIT6.map` → Total ROM = **94,492 B（92.28 KB）**，RW+ZI = **77,480 B（75.66 KB）**。2 MB 内部 Flash 仅用 **4.6%**。这是"不做外部暂存、改边下边烧"的决定性依据。
+>
+> **命名统一**：本文硬件一律指 **ESP-01S**（乐鑫 ESP8266EX 的模组形态）。旧版本混称"ESP8266"，实为同一块硬件，现统一，避免与 ESP8266 裸芯片 / ESP32 系列混淆。
 
 ---
 
@@ -12,7 +22,7 @@
 你在消息里提了 4 个具体困惑，这里一次性答掉，全部基于**当前代码实查**：
 
 ### 0.1 「代码区在哪里？我没看到啊」
-- 当前工程**没有自定义分散加载文件（.sct）**，Keil 用的是 `Options → Target` 里的默认 **IROM1 = 0x0800_0000 / Size = 0x0020_0000（2MB）**、IRAM1 = 0x2400_0000（D1 AXI SRAM 512KB）。
+- 当前工程用的是 **Keil 生成的默认 `.sct`**（`MDK-ARM/STM32H743VIT6.sct`，单镜像 `LR_IROM1 0x08000000 0x00200000`；IRAM 段 `0x20000000` 128KB + `0x24000000` 512KB），**没有自定义分散加载、没有 BootLoader 槽**。等价于"Options → Target 默认 IROM1 = 0x0800_0000 / 2MB"。
 - 所以**整个 APP（含你的代码、FreeRTOS、所有 `const` 模型权重）都从 0x0800_0000 开始往高地址排**，向量表（startup 的 `RESET`/`__Vectors`）就在这个地址开头。这就是"代码区"。
 - 做 OTA 时，必须把 APP 从 `0x0800_0000` **挪到 `0x0804_0000`（APP1 槽）**，并新建 BootLoader 占 `0x0800_0000`。这意味着要**改成分散加载（自定义 .sct）+ 改 `VECT_TAB_OFFSET`**。你"没看到代码区"是因为它现在和 BootLoader 空间叠在一起、还没拆。
 
@@ -49,20 +59,21 @@
   1. 新固件下载完先写 **APP2**，CRC32 校验通过才把 `active_slot` 切到 APP2。
   2. 重启后 BootLoader 跳 APP2；新 APP 心跳 3 分钟成功 → 固化 `FLAG=OK`（此后 APP2 变"当前"）。
   3. 下一次升级时，**旧的 APP1 变成新的备用槽**，下载写回 APP1。如此两槽交替，永远保留一份可回滚的旧固件。
-- APP1/APP2 **大小必须相等**（都是 896KB），链接脚本两个 APP 工程用同一份 `.sct` 只是 `ROM_START` 不同（0x08040000 vs 0x080C0000）。
+- APP1/APP2 **大小必须相等**（各 **768KB**），两份构建用同一份 `.sct` 模板、只是 `ROM_START` 不同（`0x08040000` vs `0x08100000`）。
+- ⚠️ **必须出两份 bin，一份产物不能两槽通用**。镜像里的函数指针、`const` 表、以及**向量表的内容**都是链接期定死的**绝对地址**；把 APP1 的 bin 烧进 APP2，其复位向量仍指向 `0x0804xxxx` → 会跳回 APP1 区域执行。因此 Keil 需要 `APP_SLOT1` / `APP_SLOT2` 两个 target，云端按 `!active_slot` 分发对应那份（详见易错 10）。
 
 ---
 
-## 1. 为什么选「ESP8266(AT) + 阿里云」
+## 1. 为什么选「ESP-01S(AT) + 阿里云」
 
 | 方案                       | 你的契合度                                                       | 结论       |
 | ------------------------ | ----------------------------------------------------------- | -------- |
-| **ESP-01S AT + 阿里云 OTA** | 你已完成 ESP8266 与 ESP-01S 的阿里云完整对接（含 MQTT），连云链路零门槛，云平台控制台直接推固件 | ✅ **首选** |
+| **ESP-01S AT + 阿里云 OTA** | 你已完成 ESP-01S 的阿里云完整对接（含 MQTT，驱动见 `Components/BSP/ESP/Src/esp01s.c`），连云链路零门槛，云平台控制台直接推固件 | ✅ **首选** |
 | 4G Cat.1（合宙 Air724）      | 覆盖广但要学 LuatOS / 新模组，无 Wi-Fi 场景才需要                           | 现场无网时再上  |
 | 自建 HTTP 服务器              | 最灵活最累，签名加密版本管理全自己写                                          | 不推荐起步    |
 | BLE/Nordic DFU           | 短距离，手机传包，不适合批量远程                                            | ❌        |
 
-**你已完整对接过 ESP8266 与 ESP-01S 的阿里云 MQTT**，连云链路（三元组、MQTT 订阅/发布、JSON 报文）是现成资产，直接复用。ESP-01S 出厂默认 AT 固件不支持 MQTT 指令，需刷入**带 MQTT 的 AT 固件**——既然你已成功对接过，说明这块固件/配置已在手，直接沿用。
+**你已完整对接过 ESP-01S 的阿里云 MQTT**，连云链路（三元组、MQTT 订阅/发布、JSON 报文）是现成资产，直接复用。ESP-01S 出厂默认 AT 固件不支持 MQTT 指令，需刷入**带 MQTT 的 AT 固件**——既然你已成功对接过，说明这块固件/配置已在手，直接沿用。
 
 ---
 
@@ -75,52 +86,93 @@
 | **W25Q64 SPI Flash** | ✅ 已购 + 驱动完 + 测试完 | SPI1（PA4 CS / PA5-7），含崩溃黑匣子，见 `Components/BSP/W25Q64/Src/BSP_W25Q64.c` |
 | **串口助手** | ✅ 已有 | 调试 ESP-01S AT 指令用 |
 
-### 🔴 现在唯一要补的：给 ESP-01S 分配一个**新串口**
-- 现状串口占用：**USART1（PA9/PA10）= VOFA 控制台/日志**；**UART4（PA0/PA1）= 淘晶驰串口屏**。两者都已占满，**没有空闲串口给 ESP-01S**。
-- **方案：新开 USART2（PA2=TX / PA3=RX）** 接 ESP-01S（推荐，引脚集中好布线）；备选 USART3（PB10/PB11）。
-- 注意 DMA 流避让：`DMA1 Stream2/3` 已给 SPI1（W25Q64），`DMA1 Stream4` 已给 USART1_RX。USART2 的 RX DMA 要选**未被占用的流**（如 `DMA1 Stream5` 或 `DMA2` 上的流），在 `.ioc` 里配，避免和 W25Q64/SPI1、USART1 冲突（参考 `Doc/BSP.md` 的 DMA 流分配清单）。
-  - ⚠️ **现状修正（2026-08-26）**：`usart.c` 实际仅生成 `hdma_usart1_rx`，**USART2 尚未配 DMA**。§2.1/§2.2 驱动已改用 `HAL_UARTEx_ReceiveToIdle_IT` 中断接收落地（同 ESP32-S3 决策，无需 CubeMX）。本 §2.3 若后续确需 DMA 高吞吐，须在 `.ioc` 补配 `DMA1 Stream5/6` 并重生成代码，再来对齐下方流避让。
+### ✅ 串口分配（已落地，无需再补）
+
+| 外设 | 引脚 | 波特率 | 用途 |
+|---|---|---|---|
+| USART1 | PA9/PA10 | 921600 | VOFA 遥测 + 日志 + 串口控制台 |
+| **USART2** | **PA2/PA3** | **115200** | **ESP-01S（AT/MQTT）—— 驱动已落地，`esp01s.c` 用 `huart2`** |
+| USART3 | — | 115200 | 预留 |
+| UART4 | PA0/PA1 | 115200 | 淘晶驰串口屏 |
+| USART6 | — | 921600 | ESP32-S3 图像协处理器 |
+
+- ⚠️ **DMA 现状（2026-08-26 核实）**：`usart.c` 实际仅生成 `hdma_usart1_rx`，**USART2 未配 DMA**；`esp01s.c` 已改用 `HAL_UARTEx_ReceiveToIdle_IT` 中断接收（与 ESP32-S3 同决策，无需动 CubeMX）。
+  → **OTA 沿用这套中断接收即可，不必为 OTA 补 DMA**：92 KB 固件在 115200bps 满速约 6.6 s，串口不是瓶颈；OTA 真正的耗时大户是 **Flash 擦除**（见易错 12）。若日后确需 DMA，须在 `.ioc` 补未被占用的流（`DMA1 Stream5/6` 或 DMA2），避让 `DMA1 Stream2/3`（SPI1/W25Q64）与 `DMA1 Stream4`（USART1_RX）。
 
 ### 🟡 按需
 | 成品 | 何时买 | 参考价 |
 |---|---|---|
 | 合宙 Air724UG 4G DTU | 设备无 Wi-Fi 覆盖的现场 | ¥160~280 |
 
-### 🟢 可选（可靠性）
-| 成品 | 用途 | 参考价 |
-|---|---|---|
-| 独立看门狗 | 新固件起不来自动复位触发回滚 | ¥3~8 |
+### 🟢 可靠性：片内已有，无需采购
 
-> 板子 **STM32H743VIT6 = 2MB Flash**，双 APP（各 896KB）空间绰绰有余，**不用为空间买任何东西**。
+| 机制 | 现状 | 用途 |
+|---|---|---|
+| **IWDG1**（片内，LSI 32 kHz） | ✅ 已在 `.ioc` 配置（Prescaler=32 / Reload=4095 ≈ **4.1 s**）；2026-09-02 已改为**三阶段监管**并启用（`APP_ENABLE_WATCHDOG=1`） | 新固件起不来 / 擦写卡死 → 复位触发回滚，见 §10 |
+
+> 板子 **STM32H743VIT6 = 2MB Flash**，双 APP（各 768KB）装 92KB 的 APP 绰绰有余，**不用为空间或可靠性买任何东西**。
 
 ---
 
 ## 3. Flash 分区（详见 h7_flash_layout.svg）
 
-| 扇区 | 地址 | 用途 | 大小 |
-|---|---|---|---|
-| S0 | 0x0800_0000 | **BootLoader**（校验/搬运/引导，独立工程） | 128 KB |
-| S1 | 0x0802_0000 | 参数区：OTA_FLAG / version / crc / active_slot | 128 KB |
-| S2–S8 | 0x0804_0000 | **APP1（当前运行固件 = .text+.rodata[含两类模型权重]+.data映像）** | 896 KB |
-| S9–S15 | 0x080C_0000 | **APP2（升级备用 / 下载目标）** | 896 KB |
+> 基准：H743 = 2MB / 128KB = **S0–S15**；**Bank1 = S0–S7（`0x0800_0000`–`0x080F_FFFF`）**，**Bank2 = S8–S15（`0x0810_0000`–`0x081F_FFFF`）**。
+
+| 扇区 | 地址 | Bank | 用途 | 大小 |
+|---|---|---|---|---|
+| S0 | 0x0800_0000 | 1 | **BootLoader**（判定/校验/切槽/跳转，**不含网络**，独立工程） | 128 KB |
+| S1 | 0x0802_0000 | 1 | 参数区：`ota_param_t`（FLAG / version / crc / img_size / active_slot / pending_slot / boot_attempt） | 128 KB |
+| S2–S7 | 0x0804_0000 | 1 | **APP1**（槽 A = .text + .rodata[含两类模型权重] + .data 映像） | 768 KB |
+| S8–S13 | 0x0810_0000 | 2 | **APP2**（槽 B） | 768 KB |
+| S14–S15 | 0x081C_0000 | 2 | 预留（参数镜像 / 出厂恢复镜像 / 文件系统） | 256 KB |
+
+> 🔴 **旧版分区表有硬错误，已修正**：原表 APP1 写 `S2–S8 @0x08040000` + 896KB（结束于 `0x0811_FFFF`），APP2 却写 `0x080C_0000`——而 `0x080C_0000` 实为 **S6 起点**，两槽**重叠 384 KB**，`VECT_TAB_OFFSET` 的 `0xC0000` 同步错。且"S2–S8"本身跨 Bank 边界（S8 已属 Bank2），无论怎么摆都不满足 RWW。
 
 要点：
-- APP1/APP2 大小相等，靠 `active_slot` 决定跳哪个（见 §0.4）。
+- **每槽完整落在单个 Bank 内** —— 这是本表的核心约束，不是凑整。APP1 全在 Bank1、APP2 全在 Bank2，才吃得到 H7 的 **read-while-write**：从 APP1 运行时烧 APP2（或反之）CPU 不 stall。槽若跨 Bank 边界，烧到同 Bank 那段时取指停摆，OTA 期间整个系统卡死数秒。
+- `VECT_TAB_OFFSET`：APP1 = `0x40000`，APP2 = **`0x100000`**（**不是旧版的 0xC0000**）。在 `system_stm32h7xx.c` 改，且 BootLoader 跳之前 `SCB->VTOR` 也要设对。
+- `active_slot` 决定跳哪个槽；**下载永远写 `!active_slot`**（备用槽），见 §4。
+- 参数区在 S1（Bank1）：从 APP2 跑时写参数零 stall；从 APP1 跑时写参数有短暂停顿（同 Bank）。可接受——参数写入只在状态迁移时发生（每轮 OTA 几次），不是热路径。若要彻底消除可在 S14 放镜像区。
 - **编译期模型权重**（Fault_Diagnosis `model_weights.h` + EdgeImpulse 球磨机检测）都在 APP 固件的 `.rodata` 里，**随 APP 整包升级自动覆盖**，不单独开通道（见 §0.3）。
 - **运行期参数**（磁标定、崩溃黑匣子）在外部 **W25Q64**，OTA 碰不到、自然保留。
-- `VECT_TAB_OFFSET`：APP1 = `0x40000`，APP2 = `0xC0000`（在 `system_stm32h7xx.c` 改，且 BootLoader 跳之前也要 `SCB->VTOR` 设对）。
+- ⚠️ **W25Q64 不再承担 OTA 缓冲**（旧版设计，已废弃）：APP 仅 92KB、内部 Flash 余 1.9MB，没有外部暂存需求；且 W25Q64 已承载磁标定 + 崩溃黑匣子，再叠 OTA 缓冲就是三用途共享一片、无任何分区隔离的踩踏风险。OTA 改走**内部 Flash 边下边烧**，冲突自动消解（见 §5.3）。
 
 ---
 
 ## 4. 升级流程（详见 bootloader_flow.svg）
 
-1. 上电 → BootLoader(S0) 初始化 → 读参数区 `OTA_FLAG` / `active_slot`。
-2. `FLAG == OK` 且无升级任务 → 直接跳激活 APP。
-3. `FLAG == UPDATE` → 通知 ESP-01S(USART2) 通过 MQTT 收阿里云下发的固件 URL → HTTP 拉包 → 写入 W25Q（断点续传）。
-4. **CRC32 整包校验**：失败丢弃重试（≤3），成功则擦 APP 备用槽 + 写新固件。
-5. 置 `OTA_FLAG = PENDING` + 新版本号 + 切 `active_slot` → 软件复位。
-6. 重启后 BootLoader 见 PENDING → 跳新 APP → 新 APP 启动后 **3 分钟内上报心跳**。
-7. 心跳成功 → `FLAG = OK`，升级完成；**失败/无心跳 → 回滚到旧 APP（切回 active_slot 旧值）**。
+> **职责定死**（旧版 §4 与 §5.2/§5.3 自相矛盾，此处统一）：
+> **APP 负责下载 + 烧写，BootLoader 只负责「判定 → 校验 → 切槽 → 跳转」，BootLoader 不含任何网络代码。**
+>
+> 理由：① BootLoader 必须"永远不需要被升级"——升级它是唯一无法回滚的操作（BootLoader 刷坏 = 真砖）；② 网络协议栈（AT/MQTT/HTTP）恰恰是最易变的部分，塞进 BootLoader 等于把必然迭代的东西锁进不可回滚的位置；③ `esp01s.c` 在 APP 工程，BootLoader 要用只能复制一份，直接制造第二真相源。BootLoader 只留 Flash 驱动 + CRC32 + 跳转，约 8–15KB。
+
+**状态机**（`FLAG ∈ {OK, UPDATE, PENDING}`）
+
+| FLAG | 含义 | BootLoader 动作 |
+|---|---|---|
+| `OK` | 常态 | 校验 `active_slot` → 直接跳 |
+| `UPDATE` | 已受理升级任务 | **仍跳当前 `active_slot` 的 APP**，下载由 APP 完成 |
+| `PENDING` | 新固件已烧入备用槽，待确认 | **重算备用槽 CRC** → 通过则切 `active_slot` 并跳；失败/超次则回滚 |
+
+**时序**
+
+1. 上电 → BootLoader(S0)：`IWDG_Start()`（裸轮询喂狗，见 §10）→ 读 S1 参数。
+2. `FLAG == OK` → 校验 active 槽栈顶合法 → 跳 APP。
+3. `FLAG == UPDATE` → **跳当前 active APP**（BootLoader 不进下载模式）。APP 起来后：
+   - 订阅阿里云 OTA topic，拿到 `{version, size, url, sign}`；
+   - 按 `!active_slot` 挑对应构件（APP1 版 / APP2 版 bin，见易错 10）；
+   - HTTP 分包拉取 → **边收边烧进备用槽**（不落 W25Q）。
+4. 收完 → **镜像自检**（MSP / 复位向量 / 目标槽范围，见易错 11）→ 整包 CRC32 与云端 `sign` 比对。
+5. 通过 → 写 S1：`pending_slot = !active_slot`、新 version、`crc32`、`img_size`、`FLAG = PENDING`、`boot_attempt = 0` → `NVIC_SystemReset()`。
+6. 重启 BootLoader 见 `PENDING` → **自己重算一遍备用槽 CRC（不信 APP 写的 flag）**：
+   - 通过 → `active_slot = pending_slot`、`boot_attempt = 0`，**仍保留 PENDING**（交给心跳固化）→ 跳新 APP；
+   - 失败 → `boot_attempt++`；`>= OTA_BOOT_MAX(3)` 则回滚（见下）。
+7. 新 APP 启动 → **3 分钟内 MQTT 心跳连续成功** → APP 自己写 `FLAG = OK` 固化，升级完成。
+   - 心跳失败 / 根本起不来 → 每次进 `PENDING` 都 `boot_attempt++`，`>= 3` 则 `active_slot` 切回旧值 + `FLAG = OK` + 上报回滚事件 → 复位。
+
+> **两步确认缺一不可**：第 6 步的 CRC 重算兜住"烧坏了 / 烧一半断电"；第 7 步的心跳兜住"烧对了但业务层跑飞（联网失败、推理崩溃）"。少任何一步都会留下变砖窗口。
+>
+> **不做断点续传**：92KB 全包重下只需 ~7s，比维护 offset 状态简单得多。⚠️ 但**重下前必须重新擦除**——Flash 只能 1→0，写过的位置未擦不能改写。
 
 ---
 
@@ -332,4 +384,4 @@ void app_heartbeat_task(void) {
 
 ---
 
-*归档：本方案为 `AI_deploy` 项目 OTA 设计稿（含代码区/RW-ZI 划分、双 APP 与 EdgeImpulse 参数对应、ESP-01S 接 USART2 方案、球磨机检测时序建议），配套 `h7_flash_layout.svg`、`bootloader_flow.svg`。故障与误判归 `Components/Debug/error.md`。*
+*归档：本方案为 `AI_deploy` 项目 OTA 设计稿（含代码区/RW-ZI 划分、双 APP 与 EdgeImpulse 参数对应、ESP-01S 接 USART2 方案、球磨机检测时序建议），配套 `h7_flash_layout.svg`、`bootloader_flow.svg`。故障与误判归 `Components/Debug/Error/Error_Readme_idx.md`。*

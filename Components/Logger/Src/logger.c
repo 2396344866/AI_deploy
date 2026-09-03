@@ -12,6 +12,8 @@
 #include <string.h>
 #include <stdio.h>
 #include <stdarg.h>
+#include "dbg_config.h"   /* DBG_LOG_POSTEST：Logger_Test 内部路径探针门控 */
+#include "app_config.h"   /* APP_ENABLE_LOGGER：Logger_Test 门控（必须与 Postest.c 同一真相源） */
 
 /* ============================ 配置 ============================ */
 #define LOG_RB_SIZE   1024U      /* 环形缓冲容量（字节，RAM，掉电丢失） */
@@ -33,6 +35,7 @@ void logger_emit_direct(uint8_t level, const char *level_str, const char *tag,
 }
 void logger_drain(void) {}
 int logger_flush_to_flash(void) { return 0; }
+void logger_set_uart1_text_mute_level(uint8_t level) { (void)level; }
 
 #else  /* ===== LOG_ENABLED ===== */
 
@@ -41,6 +44,10 @@ static char          s_rb[LOG_RB_SIZE];
 static volatile uint16_t s_rb_head;   /* 写入位置 */
 static volatile uint16_t s_rb_tail;   /* 读出位置 */
 static uint8_t       s_log_runtime_level = LOG_RUNTIME_DEFAULT_LEVEL;
+
+/* UART1 文本静音门限(Channel A)：级别>本值不进主环。默认 0xFF=不静音；
+ * 遥测发包(≥TRACE)抬到 WARN，留 W/E/F。 */
+static uint8_t       g_uart1_text_mute_above = 0xFFU;
 
 /* Channel B 关键日志环形缓冲（FATAL/ERROR/系统里程碑(INFO) 黑匣子副本）：
  * 只被 flush_to_flash 读，不被 drain 重复打印到串口，避免关键行在终端重复出现。 */
@@ -116,6 +123,9 @@ void logger_set_level(uint8_t level) {
     s_log_runtime_level = (level > LOG_COMPILE_MAX_LEVEL) ? LOG_COMPILE_MAX_LEVEL : level;
 }
 uint8_t logger_get_level(void) { return s_log_runtime_level; }
+void logger_set_uart1_text_mute_level(uint8_t level) {
+    g_uart1_text_mute_above = level;
+}
 /*
 	将经过双重级别过滤的日志，格式化成带时间戳、标签和文件行号的纯文本字符串
 	在关中断保护下安全推入环形缓冲区，供后台异步消费（打印/存储）
@@ -125,6 +135,8 @@ void logger_emit(uint8_t level, const char *level_str, const char *tag,
     /* 双重过滤兜底（LOG_EMIT 宏已预判断，此处防 logger_emit 被直接调用绕过） */
     if (level > s_log_runtime_level) return;
     if (level > LOG_COMPILE_MAX_LEVEL)      return;
+    /* 遥测静音：级别>门限的 Channel A 文本不进主环(避免冲 VOFA 波形) */
+    if (level > g_uart1_text_mute_above) return;
     char buf[LOG_LINE_MAX];
     int  off = 0;
     /* 头：[时间戳ms][级别][标签] */
@@ -277,5 +289,63 @@ int logger_flush_to_flash(void)
     log_wdt_feed();
     return ret;
 }
+
+/* ===================== [迁移] Logger 冒烟测试：从 selftest.c 下沉到本组件（按 APP_ENABLE_LOGGER 门控） ===================== */
+#if defined(APP_ENABLE_LOGGER) && APP_ENABLE_LOGGER
+int Logger_Test(void)
+{
+    /* 受控打印各优先级样例行，验证环形缓冲/级别门控/flush；
+     * 低于 LOG_COMPILE_MAX_LEVEL 的行被编译期裁剪（运行期零开销），
+     * 这正是 logger 机制正确性的一部分——可借此确认当前级别门控是否生效。
+     * 级别规划（见 logger.h 工业语义）：
+     *   - F/E/W/I 样例行：各走对应级别通道（F/E=Channel B 保证、W/I=Channel A），属 Logger 自测
+     *     "证明机制按预期工作"，默认编译级即出（INFO 里程碑式）。
+     *   - D/T 样例行：仅编译级>=DEBUG/TRACE 出现，验证高等级裁剪生效。
+     *   - 内部执行路径探针(CKPT)属 DEBUG 语义，走 LOG_EMIT_DIRECT(LOG_LVL_DEBUG,"D","POSTEST",...)（Channel B 同步）；
+     *     默认 build(未开 DBG_LOG_POSTEST)不编进；需定位 POST 卡死行时 DBG_LOG_POSTEST=1 且
+     *     LOG_COMPILE_MAX_LEVEL>=DEBUG 即出（仍 Channel B 保证落线）。
+     * POST 期间 TIM7 未接管喂狗，本函数每步前主动喂狗防饿死 IWDG。 */
+    log_wdt_feed();
+    #if DBG_LOG_POSTEST
+        LOG_EMIT_DIRECT(LOG_LVL_DEBUG, "D", "POSTEST", "Logger_Test enter (runtime_lvl=%u compile_max=%u)",
+              (unsigned)logger_get_level(), (unsigned)LOG_COMPILE_MAX_LEVEL);
+    #endif
+
+    log_wdt_feed(); LOG_F("LOGTEST", "logger smoke [FATAL] sample");
+    #if DBG_LOG_POSTEST
+        LOG_EMIT_DIRECT(LOG_LVL_DEBUG, "D", "POSTEST", "Logger_Test after LOG_F (Channel B 同步直发)");
+    #endif
+    log_wdt_feed(); LOG_E("LOGTEST", "logger smoke [ERROR] sample");
+    #if DBG_LOG_POSTEST
+        LOG_EMIT_DIRECT(LOG_LVL_DEBUG, "D", "POSTEST", "Logger_Test after LOG_E");
+    #endif
+    log_wdt_feed(); LOG_W("LOGTEST", "logger smoke [WARN]  sample");
+    #if DBG_LOG_POSTEST
+        LOG_EMIT_DIRECT(LOG_LVL_DEBUG, "D", "POSTEST", "Logger_Test after LOG_W (Channel A 入环)");
+    #endif
+    log_wdt_feed(); LOG_I("LOGTEST", "logger smoke [INFO]  sample");
+    #if DBG_LOG_POSTEST
+        LOG_EMIT_DIRECT(LOG_LVL_DEBUG, "D", "POSTEST", "Logger_Test after LOG_I");
+    #endif
+
+#if LOG_COMPILE_MAX_LEVEL >= LOG_LVL_DEBUG
+    log_wdt_feed(); LOG_D("LOGTEST", "logger smoke [DEBUG] sample (仅编译级>=DEBUG 出现)");
+#if DBG_LOG_POSTEST
+    LOG_EMIT_DIRECT(LOG_LVL_DEBUG, "D", "POSTEST", "Logger_Test after LOG_D");
+    #endif
+#endif
+#if LOG_COMPILE_MAX_LEVEL >= LOG_LVL_TRACE
+    log_wdt_feed(); LOG_T("LOGTEST", "logger smoke [TRACE] sample (仅编译级>=TRACE 出现)");
+#if DBG_LOG_POSTEST
+    LOG_EMIT_DIRECT(LOG_LVL_DEBUG, "D", "POSTEST", "Logger_Test after LOG_T");
+    #endif
+#endif
+    log_wdt_feed();
+    #if DBG_LOG_POSTEST
+        LOG_EMIT_DIRECT(LOG_LVL_DEBUG, "D", "POSTEST", "Logger_Test exit OK");
+    #endif
+    return 0;
+}
+#endif
 
 #endif /* LOG_ENABLED */

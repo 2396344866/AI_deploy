@@ -38,6 +38,10 @@ int w25q_crashlog_save(const uint8_t *data, uint32_t len);
 
 /* 上电自检：JEDEC 校验 + 擦/写/读回环，验证 40MHz SCK 稳定性。返回 0=通过，<0=失败 */
 int W25QXX_Test(void);
+
+/* POST 外部 Flash 自检入口（黑匣子读/擦 + W25QXX_Test 回环），由 Postest.c 的 g_postests[] 调用。
+ * 实现见本文件尾部。 */
+int Flash_Test(void);
 #endif
 
 

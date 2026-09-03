@@ -29,6 +29,9 @@ Components/Debug/Tools
 Components/Debug/*.log
 Components/Debug/*.txt
 
+# Components/Debug 仅忽略调试产物（日志/临时文本），源文件与文档随工程公开
+Components/Debug/*.txt
+
 # ===== 软件测试验证功能PC端口（本机验证由于每个机器验证效果差别较大故不公开）=====
 ML/
 
@@ -93,4 +96,7 @@ Listings/
 .idea/
 .DS_Store
 *.bak
-*.bak*
+*.bak
+*.bak2
+*.ioc.bak*
+Components/BSP/ESP/Inc/esp01s_config_local.h

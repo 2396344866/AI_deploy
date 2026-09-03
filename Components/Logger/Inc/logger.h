@@ -42,11 +42,11 @@ extern "C" {
 
 /* 编译进二进制的最高级别（可被单个 .c 文件用 #define LOG_LOCAL_LEVEL 覆盖） */
 #ifndef LOG_COMPILE_MAX_LEVEL
-#define LOG_COMPILE_MAX_LEVEL LOG_LVL_INFO
+#define LOG_COMPILE_MAX_LEVEL LOG_LVL_DEBUG
 #endif
 /* 运行期默认级：boot 初值，logger_set_level() 可现场改写，但永远被编译上限封顶 */
 #ifndef LOG_RUNTIME_DEFAULT_LEVEL
-#define LOG_RUNTIME_DEFAULT_LEVEL     LOG_LVL_INFO
+#define LOG_RUNTIME_DEFAULT_LEVEL     LOG_LVL_DEBUG
 #endif
 
 /* 一致性铁律: LOG_COMPILE_MAX_LEVEL(编译上限) 必须 >= LOG_RUNTIME_DEFAULT_LEVEL(运行默认)。
@@ -117,9 +117,16 @@ void logger_emit_direct(uint8_t level, const char *level_str, const char *tag,
                         const char *file, int line, const char *fmt, ...);
 void logger_drain(void);           /* 由低优先级 LoggerTask 循环调用，刷到串口 */
 int  logger_flush_to_flash(void);  /* 崩溃时调用，把最近日志刷入 Flash 黑匣子 */
+/* 遥测静音门限(Channel A)：级别>本值不进主环。默认 0xFF=不静音；
+ * 发包(≥TRACE)抬到 WARN，静音 INFO/DBG/TRACE，留 W/E/F；Channel B 不受影响。 */
+void logger_set_uart1_text_mute_level(uint8_t level);
 
 /* 喂狗钩子（弱符号默认空；BSP 覆盖为 IWDG 喂狗）。崩溃落盘与常态喂狗共用，保看门狗不被饿死。 */
 void log_wdt_feed(void);
+
+/* POST Logger 冒烟测试入口（按 APP_ENABLE_LOGGER 门控）：分级/门控/flush 自检。
+ * 实现见 logger.c 尾部。 */
+int Logger_Test(void);
 
 #ifdef __cplusplus
 }

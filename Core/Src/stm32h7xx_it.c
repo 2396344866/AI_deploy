@@ -60,6 +60,52 @@ extern UART_HandleTypeDef huart4; // 如果还没有的话
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
 
+/* ==================== HardFault 自愈式诊断 ==================== */
+/* 全部走轮询 USART1(log_backend_putc)，零 RTOS/HAL 依赖，故障上下文安全。
+   不调用任何可能再次 fault 的函数（禁用 printf / RTOS API）。 */
+extern void log_backend_putc(char c);
+
+/* SCB 故障寄存器（Cortex-M7 固定地址，不依赖 CMSIS 宏，最稳妥） */
+#define HF_CFSR    (*(volatile uint32_t *)0xE000ED28UL)  /* 可配置故障状态(Mem/Bus/Usage) */
+#define HF_HFSR    (*(volatile uint32_t *)0xE000ED2CUL)  /* Hard Fault 状态 */
+#define HF_DFSR    (*(volatile uint32_t *)0xE000ED30UL)  /* Debug Fault 状态 */
+#define HF_MMFAR   (*(volatile uint32_t *)0xE000ED34UL)  /* MemManage 故障地址 */
+#define HF_BFAR    (*(volatile uint32_t *)0xE000ED38UL)  /* BusFault 故障地址 */
+
+static void hf_putc(char c) { log_backend_putc(c); }
+static void hf_puts(const char *s) { while (*s) hf_putc(*s); }
+static void hf_newline(void) { hf_putc('\r'); hf_putc('\n'); }
+static void hf_puthex32(uint32_t v) {
+    hf_puts("0x");
+    for (int s = 28; s >= 0; s -= 4) {
+        uint8_t n = (uint8_t)((v >> s) & 0xFU);
+        hf_putc(n < 10U ? (char)('0' + n) : (char)('A' + n - 10U));
+    }
+}
+/* 解码 CFSR 三大子状态字，打印可读故障类别（面试可逐一解释） */
+static void hf_decode_cfsr(uint32_t cfsr) {
+    uint8_t  mmfsr = (uint8_t)(cfsr & 0xFFU);
+    uint8_t  bfsr  = (uint8_t)((cfsr >> 8) & 0xFFU);
+    uint16_t ufsr  = (uint16_t)((cfsr >> 16) & 0xFFFFU);
+    if (mmfsr & (1u<<0)) hf_puts(" IACCVIOL");    /* 取指访问违例 */
+    if (mmfsr & (1u<<1)) hf_puts(" DACCVIOL");    /* 数据访问违例 */
+    if (mmfsr & (1u<<3)) hf_puts(" MUNSTKERR");   /* 异常返回出栈错 */
+    if (mmfsr & (1u<<4)) hf_puts(" MSTKERR");     /* 异常入栈错 */
+    if (mmfsr & (1u<<7)) hf_puts(" MMARVALID");
+    if (bfsr  & (1u<<0)) hf_puts(" IBUSERR");
+    if (bfsr  & (1u<<1)) hf_puts(" PRECISERR");   /* 精确总线错误，坏地址在 BFAR */
+    if (bfsr  & (1u<<2)) hf_puts(" IMPRECISERR"); /* 不精确总线错误(写缓冲延迟) */
+    if (bfsr  & (1u<<3)) hf_puts(" UNSTKERR");
+    if (bfsr  & (1u<<4)) hf_puts(" STKERR");
+    if (bfsr  & (1u<<7)) hf_puts(" BFARVALID");
+    if (ufsr  & (1u<<0)) hf_puts(" UNDEFINSTR");  /* 未定义指令 */
+    if (ufsr  & (1u<<1)) hf_puts(" INVSTATE");    /* 非法状态(Thumb/ARM 混用) */
+    if (ufsr  & (1u<<2)) hf_puts(" INVPC");
+    if (ufsr  & (1u<<3)) hf_puts(" NOCP");        /* 协处理器不存在(浮点未使能却用) */
+    if (ufsr  & (1u<<8)) hf_puts(" UNALIGNED");
+    if (ufsr  & (1u<<9)) hf_puts(" DIVBYZERO");   /* 除零(若使能) */
+}
+
 /* USER CODE END 0 */
 
 /* External variables --------------------------------------------------------*/
@@ -72,6 +118,7 @@ extern DMA_HandleTypeDef hdma_uart4_tx;
 extern DMA_HandleTypeDef hdma_usart1_rx;
 extern UART_HandleTypeDef huart4;
 extern UART_HandleTypeDef huart1;
+extern UART_HandleTypeDef huart2;
 extern UART_HandleTypeDef huart6;
 extern TIM_HandleTypeDef htim6;
 
@@ -79,6 +126,8 @@ extern TIM_HandleTypeDef htim6;
 void Motor_1ms_Handler(void);       /* TIM7 1ms 控制环：由 Components/Motor 实现 */
 extern osSemaphoreId_t g_semAttitudeDataReadyHandle;  /* CubeMX 生成（二值信号量） */
 extern osSemaphoreId_t g_semScreenUpdateHandle;       /* 淘晶驰屏数据到达：ISR 释放，Task_Screen 获取 */
+
+
 /* USER CODE END EV */
 
 /******************************************************************************/
@@ -105,43 +154,30 @@ void NMI_Handler(void)
 void HardFault_Handler(void)
 {
   /* USER CODE BEGIN HardFault_IRQn 0 */
+  /* 自愈式 HardFault 诊断：进入即打印故障类别 + 坏指针 + 完整异常帧，
+     焚毁前刷黑匣子，不依赖 RTOS/HAL 状态。每次 fault episode 打印一次，
+     IWDG 超时复位后会重新进入本函数再次打印（串口看到重复属预期）。 */
+    uint32_t lr_exc;
+    __asm volatile ("mov %0, lr" : "=r" (lr_exc));   /* 读 EXC_RETURN */
+    uint32_t *sp = (lr_exc & 0x4U) ? (uint32_t *)__get_PSP() : (uint32_t *)__get_MSP();
+    /* 异常硬件压栈帧: r0,r1,r2,r3,r12,lr(pc-ret),pc,xPSR */
+    uint32_t r0_ = sp[0], r1_ = sp[1], r2_ = sp[2], r3_ = sp[3];
+    uint32_t r12_ = sp[4], lr_f = sp[5], pc_ = sp[6], xpsr_ = sp[7];
+    /* r4-r11 为 callee-saved，未进异常帧；此处为最佳努力(best-effort)：
+       C 函数序言可能已占用它们，真实故障值需 naked 包装才 100% 可靠。 */
+    uint32_t r4_, r5_, r6_, r7_, r8_, r9_, r10_, r11_;
+    __asm volatile ("mov %0,r4\n mov %1,r5\n mov %2,r6\n mov %3,r7\n"
+                    "mov %4,r8\n mov %5,r9\n mov %6,r10\n mov %7,r11\n"
+                    : "=r"(r4_), "=r"(r5_), "=r"(r6_), "=r"(r7_),
+                      "=r"(r8_), "=r"(r9_), "=r"(r10_), "=r"(r11_));
+
 
   /* USER CODE END HardFault_IRQn 0 */
   while (1)
   {
     /* USER CODE BEGIN W1_HardFault_IRQn 0 */
-    /* 诊断横幅：不再静默死循环。轮询 USART1 打印，一眼可知进了 HardFault
-       （不依赖 RTOS/HAL 状态，故障上下文安全）。 */
-    {
-        extern void log_backend_putc(char c);
-        /* 异常入栈帧(硬件压入异常栈): r0,r1,r2,r3,r12,lr,pc,xPSR */
-        uint32_t lr_exc;
-        __asm volatile ("mov %0, lr" : "=r" (lr_exc));   /* CMSIS 无 __get_LR，内联汇编读 R14 */
-        uint32_t *sp = (lr_exc & 0x4U) ? (uint32_t *)__get_PSP() : (uint32_t *)__get_MSP();
-        uint32_t exc_pc = sp[6];
-        uint32_t exc_lr = sp[5];
-        const char *hf = "\r\n*** HARD FAULT *** system halted\r\n";
-        for (const char *p = hf; *p; p++) log_backend_putc(*p);
-        /* 打印故障指令地址(ip)与异常返回 lr，定位是哪一行触发的 HardFault */
-        const char *head = "ip=";
-        for (const char *p = head; *p; p++) log_backend_putc(*p);
-        for (int s = 28; s >= 0; s -= 4) {
-            uint8_t n = (uint8_t)((exc_pc >> s) & 0xFU);
-            log_backend_putc(n < 10U ? (char)('0' + n) : (char)('A' + n - 10U));
-        }
-        log_backend_putc(' ');
-        head = "lr=";
-        for (const char *p = head; *p; p++) log_backend_putc(*p);
-        for (int s = 28; s >= 0; s -= 4) {
-            uint8_t n = (uint8_t)((exc_lr >> s) & 0xFU);
-            log_backend_putc(n < 10U ? (char)('0' + n) : (char)('A' + n - 10U));
-        }
-        log_backend_putc('\r'); log_backend_putc('\n');
-    }
-    /* 崩溃黑匣子：尽力把最近日志刷入 Flash（轮询写，不依赖 RTOS/DMA）。
-       面试叙述对应：进入 HardFault 后，应先让设备平稳关闭
-       （如电机停转、状态 LED 指示），再在此 while(1) 原地等待 J-Link 接入取证。 */
-    logger_flush_to_flash();
+    /* 完整诊断已在上面的 HardFault_IRQn 0 块打印一次；此处仅原地 halt，
+       由 IWDG 超时触发复位环（便于重复抓取），或等待 J-Link 接入取证。 */
     /* USER CODE END W1_HardFault_IRQn 0 */
   }
 }
@@ -324,6 +360,20 @@ void USART1_IRQHandler(void)
 }
 
 /**
+  * @brief This function handles USART2 global interrupt.
+  */
+void USART2_IRQHandler(void)
+{
+  /* USER CODE BEGIN USART2_IRQn 0 */
+
+  /* USER CODE END USART2_IRQn 0 */
+  HAL_UART_IRQHandler(&huart2);
+  /* USER CODE BEGIN USART2_IRQn 1 */
+
+  /* USER CODE END USART2_IRQn 1 */
+}
+
+/**
   * @brief This function handles UART4 global interrupt.
   */
 void UART4_IRQHandler(void)
@@ -423,7 +473,7 @@ void USART6_IRQHandler(void)
 /* MPU6050 data-ready 中断（INT 脚 -> EXTI，CubeMX 生成 EXTIx_IRQHandler 并调用本回调）。
    运行于 ISR 上下文：严格只做"Give"动作（释放信号量唤醒 Task_Sensor），
    不碰任何业务/耗时操作，符合 RTOS 铁律。EXTI 优先级数值已设 ≥5（建议 6）。 */
-#if DEBUG_ISR_CNT_MPU6050_INT
+#if defined(DEBUG_ISR_CNT_MPU6050_INT) && DEBUG_ISR_CNT_MPU6050_INT
 volatile uint32_t g_int_cnt = 0;   /* 仅调试期观察 data-ready 中断频率，发布版不编译 */
 #endif
 
@@ -431,7 +481,7 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
 {
 
     if (GPIO_Pin == MPU6050_INT_Pin) {
-#if DEBUG_ISR_CNT_MPU6050_INT
+#if defined(DEBUG_ISR_CNT_MPU6050_INT) && DEBUG_ISR_CNT_MPU6050_INT
         g_int_cnt++;
 #endif
         osSemaphoreRelease(g_semAttitudeDataReadyHandle);

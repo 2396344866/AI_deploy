@@ -14,7 +14,7 @@
  *   - 监视集合与 APP_ENABLE_X 对齐：编译掉的模块(=0/未定义)不监视，
  *     避免"不存在的任务永不 kick"导致假复位。
  *
- * 与 POST 策略配合（见 main.c TIM7 / selftest.c）：
+ * 与 POST 策略配合（见 main.c TIM7 / Postest.c）：
  *   上电->POST 期间 TIM7 不喂狗(g_wdt_tick_cnt 仍走)，由 POST 测试代码
  *   log_wdt_feed() 协作式喂（卡死测试->IWDG 抓到，慢测试活过）；
  *   POST 收尾 watchdog_arm() 置 armed + 新鲜戳，此后 TIM7 接管、

@@ -69,9 +69,25 @@ int ESP32S3_GetLatest(esp32s3_result_t *out);
 /* Debug cmd 'X': print RX stats (frame count / CRC err / last frame) via UART1 */
 void ESP32S3_PrintStats(void);
 
+/* Get total valid frames received since boot (for POST/runtime link health check).
+ * POST 期恒为 0（ESP32-S3 尚未发帧/未接）；运行期由 ISR 递增。 */
+uint32_t ESP32S3_GetFrameCount(void);
+
+/* Runtime link validation flag: set true once >=1 valid frame received.
+ * FSM/其它任务可据此判断是否具备目标检测输入（false 且过启动窗口 = 降级）。 */
+uint8_t  ESP32S3_IsLinkValidated(void);
+
 /* USART6 IDLE RX callback (forwarded by HAL_UARTEx_RxEventCallback in Components/BSP/uart_rx_dispatcher.c;
  * ISR context). */
 void ESP32S3_UART_RxCallback(UART_HandleTypeDef *huart, uint16_t size);
+
+/* Re-arm USART6 RX after an error (called from Components/BSP/uart_rx_dispatcher.c
+ * error recovery). Returns HAL status; safe in ISR context. */
+HAL_StatusTypeDef ESP32S3_UART_RxStart(void);
+
+/* POST ESP32-S3 自检入口（按 APP_ENABLE_ESP32S3 门控）：驱动/软件链路校验（非线缆）。
+ * 实现见 esp32s3.c 尾部。 */
+int Esp32S3_Test(void);
 
 #ifdef __cplusplus
 }

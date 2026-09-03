@@ -9,7 +9,7 @@
 |------|------|------|
 | `Error.md` | **运行期故障总索引**：事件 E N → 各 `Error/<TASK>_Error.md` 的映射表 | 故障查档第一站 |
 | `Debug/` | **联调工作笔记（非故障）**：状态/接线/设计/命令/栈堆/已修复 Bug | `Debug/README.md` + `Debug/联调笔记模板.md` |
-| `Error/` | **运行期故障归档**：per-task `Error/<TASK>_Error.md`（事件 E N） | `Error/README.md` |
+| `Error/` | **运行期故障归档**：per-task `Error/<TASK>_Error.md`（事件 E N） | `Components/Debug/Error/Error_Readme_idx.md` |
 | `Test/` | **测试方案**：per-task `Test/<TASK>_test.md`（量化 KPI） | `Test/test_template.md` |
 | `Ref/` | **全局共用**：门控总表 / 架构图 / VOFA 通道 | 见下 |
 | `Tools/` | **调试脚本**：遥测帧校验 `verify_dbg_frame.py` | — |
@@ -33,7 +33,7 @@
 |------|------|
 | `Ref/log_gating.md` | **门控总表（去重合并版）**：级别门控 Gate1-4 天花板级联 + 四级/六级表 + 通道分流 + 看门狗双喂 + 发射流/遥测 mermaid；运行期调级 `debug<n>`/Keil |
 | `Ref/module_gating.md` | 功能/Profile 门控（L1 `APP_ENABLE_X`）+ 命令台架构（E20 修复）；与日志级别门控（L2/L3）正交 |
-| `Ref/vofa_telemetry.md` | VOFA 44 通道映射 |
+| `Ref/motor_vofa_telemetry.md` | VOFA 59 通道映射 |
 | `Error/crash_error.md` | 启动卡死 / HardFault 通用取证方法论 |
 
 ### 门控模型一句话（详见 `log_gating.md`）
@@ -51,7 +51,7 @@ Gate1(编译上限, 硬天花板, 最高) → Gate2(运行级别, 被 Gate1 封�
 
 ## 四、新增一个任务的调试归档
 
-见 `Error/README.md` 第三节「新增一个任务调试/故障归档的步骤」（联调笔记 → 故障归档 → 测试方案 → 登记映射表 → 交叉引用）。
+见 `Components/Debug/Error/Error_Readme_idx.md` §3.3「新增一个任务调试/故障归档的步骤」（联调笔记 → 故障归档 → 测试方案 → 登记映射表 → 交叉引用）。
 
 ## 五、不编造原则
 

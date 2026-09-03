@@ -29,4 +29,9 @@ void BSP_LOG_UART1_OnRxEvent(uint16_t size);
 void BSP_LOG_UART1_OnFrame(const uint8_t *data, uint16_t len);
 void BSP_LOG_UART1_SendPoll(const uint8_t *data, uint16_t len);  /* 轮询发送，ISR 安全，用于回显探针 */
 
+/* 后端字节出口（弱符号，由 BSP_LOG.c 提供实现）。轮询直发、ISR 安全，
+ * 用于 HardFault / UART 错误回调等故障上下文打点，不依赖 RTOS/HAL 状态。
+ * 声明在此模块头，供 uart_rx_dispatcher.c / stm32h7xx_it.c 复用。 */
+void log_backend_putc(char c);
+
 #endif

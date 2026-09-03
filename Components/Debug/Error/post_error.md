@@ -1,9 +1,9 @@
 # POST / 上电自检 运行期故障归档（跨任务 Task_Test 一次性自检 + boot/启动卡死）
 
 > 本文件归 **POST / 上电自检** 运行期故障（跨任务：一次性 `Task_Test` 自检任务 + boot/启动卡死），无单一任务 owner，故独立成文件，命名与 `Error/<TASK>_error.md` 同构。
-> 事件用全局连续编号 **E N**（与 `Components/Debug/error.md` 一致）。
+> 事件用全局连续编号 **E N**（与 `Components/Debug/Error/Error_Readme_idx.md` 一致）。
 > 任务自身运行期故障看对应 `Error/<TASK>_error.md`；编译/链接/uvprojx 故障看 `Error/compile_link_error.md` / `Error/uvprojx_error.md`；启动死机取证归 `Components/Debug/Error/crash_error.md`。
-> 原 `Doc/Keil_MDK_ARM_工程排错记录.md` 问题 7 迁入此处（E26）。
+> 原 `Components/Debug/Error/Error_Readme_idx.md` 问题 7 迁入此处（E26）。
 
 ---
 

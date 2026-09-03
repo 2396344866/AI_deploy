@@ -30,7 +30,7 @@ int AI_Inference(const float *input, float *outputs);
 
 /*
  * 诊断结果结构体（上电自检 FaultDiag_ML_Test 写、NetworkTask 读）。
- * 提到本头：selftest.c 与 freertos.c 共享该类型（CubeMX 不碰本头）。
+ * 提到本头：Postest.c 与 freertos.c 共享该类型（CubeMX 不碰本头）。
  */
 typedef struct {
     uint32_t num_test_samples;
@@ -41,5 +41,11 @@ typedef struct {
     float    total_time_ms;
     uint8_t  data_is_ready;   /* 标志位：告诉网络任务数据是否已准备好 */
 } TestResults_t;
+
+/*
+ * 故障诊断 ML 自检入口（POST 阶段，关键）：批量推理算指标、写 g_Test_results。
+ * 实现见 ai_infer.c 尾部，由 Postest.c 的 g_postests[] 调用。
+ */
+int FaultDiag_ML_Test(void);
 
 #endif /* AI_INFER_H */

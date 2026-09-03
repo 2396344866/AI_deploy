@@ -1,9 +1,9 @@
 # MOTOR 任务运行期故障归档（电机 / 控制环 / 命令分发）
 
 > 本文件是 **MOTOR 任务**（StartMotorTask + 电机驱动/外环控制/串口命令分发）的运行期故障归属地，
-> 事件用全局连续编号 **E N**（与 `Components/Debug/error.md` 一致）。
+> 事件用全局连续编号 **E N**（与 `Components/Debug/Error/Error_Readme_idx.md` 一致）。
 > 联调笔记见 `Components/Debug/debug/motor_debug.md`；测试方案见 `Components/Debug/Test/motor_test.md`。
-> 编译期故障归 `Doc/Keil_MDK_ARM_工程排错记录.md`（问题 N）；启动死机取证归 `Components/Debug/Error/crash_error.md`。
+> 编译期故障归 `Components/Debug/Error/Error_Readme_idx.md`（问题 N）；启动死机取证归 `Components/Debug/Error/crash_error.md`。
 
 ---
 

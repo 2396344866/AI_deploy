@@ -6,6 +6,10 @@
 #include "motor.h"
 #include <stdlib.h>   /* atoi */
 #include <string.h>   /* memcpy */
+#include "dbg_config.h"   /* DBG_LOG_POSTEST */
+#include "iwdg.h"         /* log_wdt_feed：POST 协作喂狗 */
+#include "app_config.h"   /* APP_ENABLE_MOTOR：Motor_Test 门控 */
+#include "cmsis_os2.h"    /* OS 类型 */
 
 /* -----------------------------------------------------------------------------
  * 运行态定义
@@ -308,8 +312,11 @@ void Motor_ProcessCommand(const char *cmd, uint16_t len)
 {
     if (cmd == NULL || len == 0U) return;
 
-    /* 复制到局部缓冲并补 '\0'，atoi 需要以 null 结尾的字符串 */
-    char buf[32];
+    /* 复制到局部缓冲并补 '\0'，atoi 需要以 null 结尾的字符串。
+       ⚠ 64 = 控制台命令缓冲（与 .ioc g_cmd_q ItemSize 一致）。
+         本函数收到的已是归一化后的旧键（mot.a 100 -> A100，更短），32 B 本够用；
+         放大到 64 是为与队列 ItemSize 对齐——len 上界已放宽到 63，缓冲小于它会静默截断。 */
+    char buf[64];
     uint16_t n = (len < (sizeof(buf) - 1U)) ? len : (sizeof(buf) - 1U);
     memcpy(buf, cmd, n);
     buf[n] = '\0';
@@ -342,3 +349,29 @@ void Motor_ProcessCommand(const char *cmd, uint16_t len)
             break;
     }
 }
+
+/* ===================== [迁移] 电机自检：从 selftest.c 下沉到本组件（按 APP_ENABLE_MOTOR 门控） ===================== */
+#if defined(APP_ENABLE_MOTOR) && APP_ENABLE_MOTOR
+int Motor_Test(void)
+{
+#if DBG_LOG_POSTEST
+    LOG_EMIT_DIRECT(LOG_LVL_DEBUG, "D", "POSTEST", "Motor_Test enter");
+#endif
+    log_wdt_feed();
+    /* Motor_App_Init() 已在 main.c 调度器启动前完成（PWM/TIM7/编码器/STBY）。
+       此处仅校验外设链路存活，**不实际转动电机**（POST 阶段机器人姿态未知，微动有倒地风险）：
+       - TIM1 PWM 计数器在跑（Motor_Probe_Tim1Span>0）
+       - 速度/编码器 API 可读不崩 */
+    uint32_t span = Motor_Probe_Tim1Span();
+    if (span == 0) {
+        LOG_W("POSTEST", "Motor PWM timer TIM1 not counting (span=0)");
+        return -1;
+    }
+    (void)Motor_GetSpeed(MOTOR_A);
+    (void)Motor_GetSpeed(MOTOR_B);
+    (void)Motor_GetPWM(MOTOR_A);
+    (void)Motor_GetTargetSpeed(MOTOR_B);
+    LOG_I("POSTEST", "Motor peripherals OK (TIM1 span=%lu)", (unsigned long)span);
+    return 0;
+}
+#endif

@@ -134,6 +134,10 @@ void     Motor_Probe_ReadAndClear(uint32_t *hiA, uint32_t *hiB, uint32_t *ticks)
    ≈0 表示冻结（CNT 卡死，PWM 输出被钉在比较态，电机无法受控）。 */
 uint32_t  Motor_Probe_Tim1Span(void);
 
+/* POST 电机自检入口（按 APP_ENABLE_MOTOR 门控）：外设链路存活校验（不实际转动）。
+ * 实现见 motor.c 尾部。 */
+int Motor_Test(void);
+
 /* 内部：单电机一步控制（速度环 / 位置环级联） */
 void     Motor_ControlStep(Motor_t *m);
 

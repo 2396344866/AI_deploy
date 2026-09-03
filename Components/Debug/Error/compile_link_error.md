@@ -1,7 +1,7 @@
 # 编译 / 链接 故障归档（Build / Link）
 
 > 本文件归 **编译期 / 链接期** 故障（L6200E 重复符号、L6218E 未定义符号等）。
-> 原 `Doc/Keil_MDK_ARM_工程排错记录.md` 的 **问题 1 / 问题 5** 迁入此处。
+> 原 `Components/Debug/Error/Error_Readme_idx.md` 的 **问题 1 / 问题 5** 迁入此处。
 > 运行期板子行为/死机 → 看 `Error/<TASK>_error.md` + `Error/post_error.md`；uvprojx / CubeMX 生成类 → 看 `Error/uvprojx_error.md`。
 > 全局参考（非按任务）：`Components/Debug/Ref/`（门控总表 / VOFA 映射）；启动死机取证见 `Error/crash_error.md`。
 

@@ -156,12 +156,17 @@ int main(void)
   /* USER CODE BEGIN 2 */
 #if !defined(APP_ENABLE_WATCHDOG) || !APP_ENABLE_WATCHDOG
   printf("[BOOT] IWDG DISABLED (debug) - reset masked off\r\n");
+#else
+  /* 上电早期刻意不启动 IWDG（防复位环），POST 开始才 IWDG_Start()，详见 iwdg.c */
+  printf("[BOOT] IWDG armed from POST start (4.1s)\r\n");
 #endif
+
+#if defined(APP_ENABLE_SCREEN) && APP_ENABLE_SCREEN
 	// 1. DMA Circular
 	HAL_UART_Receive_DMA(&huart4, rx_buf, RX4_BUFFER_SIZE);
-
 	// 2. IDLE
 	__HAL_UART_ENABLE_IT(&huart4, UART_IT_IDLE);
+#endif
 	Dbg_Telemetry_Init();   /* 调试遥测：UART1 DMA 接收启动前用 DBG_UART_BAUD 重设波特率 */
 	BSP_LOG_UART1_RxStart();
 #ifdef LOG_ENABLED

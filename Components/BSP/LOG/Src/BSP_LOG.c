@@ -17,6 +17,7 @@
 #include "BSP_LOG.h"
 #include <stdarg.h>
 #include <stdio.h>
+#include "dbg_config.h"   // 调试开关集中管理（DBG_TELEMETRY_UART_RX 等）；与 freertos.c 同源
 // 新版 ARM Compiler 6 的底层标准库已经内置了 struct __FILE 的定义
 
 
@@ -66,8 +67,10 @@ void BSP_LOG_UART1_SendPoll(const uint8_t *data, uint16_t len)
  *   注意：勿因本注释把 UART4 也"修"成 IT —— UART4 手写 DMA+IDLE 仍正确，无需动。 */
 static uint8_t s_uart1_rx[USART1_RX_BUF_SIZE];
 
+#if defined(DBG_TELEMETRY_UART_RX) && DBG_TELEMETRY_UART_RX
 volatile uint32_t g_dbg_idle_irq   = 0U;  /* RxEventCallback 调用次数（定位用） */
 volatile uint32_t g_dbg_idle_hits  = 0U;  /* 产出有效帧次数（size>0） */
+#endif
 
 void BSP_LOG_UART1_RxStart(void)
 {
@@ -92,10 +95,14 @@ void BSP_LOG_UART1_RxStart(void)
 /* HAL_UARTEx_RxEventCallback(USART1) 入口：size = 本次 IDLE 前收到的字节数，∈[0,BUF_SIZE] */
 void BSP_LOG_UART1_OnRxEvent(uint16_t size)
 {
+#if defined(DBG_TELEMETRY_UART_RX) && DBG_TELEMETRY_UART_RX
     g_dbg_idle_irq++;
+#endif
     if (size > 0U && size <= (uint16_t)USART1_RX_BUF_SIZE)
     {
+#if defined(DBG_TELEMETRY_UART_RX) && DBG_TELEMETRY_UART_RX
         g_dbg_idle_hits++;
+#endif
         /* IT 模式：数据已由 HAL ISR 写入 s_uart1_rx[0,size)，CPU 同核读写，无 D-Cache 一致性问题。
            先拷出线性帧再重武装（重武装会复位 pRxBuffPtr，避免与 OnFrame 复用缓冲冲突）。 */
         static uint8_t frame[USART1_RX_BUF_SIZE];
@@ -134,7 +141,11 @@ void UART4_Printf(const char *format, ...) {
     va_start(args, format);
     int len = vsnprintf(buffer, sizeof(buffer), format, args);
     va_end(args);
-    HAL_UART_Transmit(&huart4, (uint8_t*)buffer, len, 0xFFFF);
+    /* vsnprintf 失败返回负值；超界也须钳制，否则转 uint16_t 后变成巨大值 -> 越界发送 64KB 垃圾。
+     * 超时由 0xFFFF(≈65s) 改为 100ms：屏未接/异常时不再长时间阻塞（若在任务里调用会饿死看门狗）。 */
+    if (len > 0 && (uint32_t)len < (uint32_t)sizeof(buffer)) {
+        HAL_UART_Transmit(&huart4, (uint8_t*)buffer, (uint16_t)len, 100U);
+    }
 }
 
 /******************* (C) COPYRIGHT 2014 ANO TECH *****END OF FILE************/

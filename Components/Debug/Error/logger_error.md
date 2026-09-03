@@ -1,9 +1,9 @@
 # LOGGER 任务运行期故障归档（控制台 UART1 / 遥测 / 启动 boot）
 
 > 本文件是 **LOGGER 任务相关**运行期故障归属地：串口控制台（UART1）、VOFA 遥测帧、
-> 以及启动/FreeRTOS 初始化阶段（boot）的卡死，统一用全局连续编号 **E N**（与 `Components/Debug/error.md` 一致）。
+> 以及启动/FreeRTOS 初始化阶段（boot）的卡死，统一用全局连续编号 **E N**（与 `Components/Debug/Error/Error_Readme_idx.md` 一致）。
 > 日志/遥测门控总表见 `Components/Debug/ref/log_gating.md`；启动死机通用取证见 `Components/Debug/Error/crash_error.md`。
-> 编译期故障归 `Doc/Keil_MDK_ARM_工程排错记录.md`（问题 N）。
+> 编译期故障归 `Components/Debug/Error/Error_Readme_idx.md`（问题 N）。
 
 ---
 
@@ -122,7 +122,7 @@
 ### 现象（用户实测）
 - Keil 调试，全速运行后**关闭全速**，暂停发现 PC 停在 `Error_Handler` 的 `while(1)`（main.c:249-258），
   并非停在 main 的业务循环里。程序冻死，不上进入 osKernelStart 后的调度。
-- AI **先前误判**：曾称"程序进了 main 在循环跑，semithosting 回调 Error_Handler 非致命"。
+- **先前误判**：曾称"程序进了 main 在循环跑，semithosting 回调 Error_Handler 非致命"。
   **该判断错误**——用户指出实际一直停在 error handler 死循环，已纠正。
 
 > **通用排查链路（读 LR / 反汇编定位 / HardFault 的 CFSR 解码）见 `Components/Debug/Error/crash_error.md`；本事件为具体实例，下面只列根因方向。**
@@ -154,7 +154,7 @@
 - 若某 `osXxxNew` 返回 NULL 未判空：在 `MX_FREERTOS_Init` 后加 `configASSERT(handle != NULL)` 或 if 判空。
 - 若是调度器启动前调了阻塞 API：把该调用移到任务函数内。
 
-### AI 误判记录（诚实归档）
+### 误判复盘（诚实归档）
 - 误判 R1："进了 main 在循环跑，semithosting 回调 Error_Handler 非致命"。
   用户实测反驳：全速后暂停即停在 Error_Handler 死循环，不在业务循环。
   纠正：map 反查 PC=0x0800F2A0 ∈ `xQueueGenericSend`，确认卡在 FreeRTOS 初始化阶段，
@@ -163,7 +163,7 @@
 ### 状态
 - [x] 现象确认（卡 Error_Handler 死循环，用户在调试器实测）
 - [x] map 反查定位到 `xQueueGenericSend`（FreeRTOS 初始化阶段）
-- [x] 纠正 AI 先前"在 main 循环跑"误判
+- [x] 纠正"在 main 循环跑"误判
 - [~] 待用户用 Call Stack 确认具体是哪个 osXxxNew 触发断言
 - [ ] 修复方案取决于上一步结论
 
@@ -184,7 +184,7 @@
 
 ### 修复方案（最终配置，撤销初版降速）
 - **`dbg_config.h`**：`DBG_UART_BAUD` **921600U**（恢复；VOFA 端须同步 921600）。
-- **`dbg_config.h`**：`DBG_TELEMETRY_DECIMATE` **1**（满速率；44ch@200Hz≈70KB/s << 921600 理论上限 115KB/s，余量充足）。
+- **`dbg_config.h`**：`DBG_TELEMETRY_DECIMATE` **2**（59ch@200Hz≈95KB/s 超 921600 波特上限，降 100Hz≈47KB/s << 921600 可用上限 ~90KB/s，余量充足）。
 - **VOFA+ / 串口助手**：波特率设为 **921600**，与 `DBG_UART_BAUD` 一致。
 - **CubeMX UART1**：建议也设为 921600 保持一致（运行期 `Dbg_Telemetry_Init()` 已用 `DBG_UART_BAUD` 覆盖，功能上非必须，仅为避免重跑 CubeMX 后看 .ioc 困惑）。
 - **其他串口不动**：USART2(ESP-01S)=115200（模块 AT 默认）、USART6(ESP32-S3)=921600（代码强制，MCU 互联）、UART4(淘晶驰屏)=115200。
@@ -198,6 +198,40 @@
 > **supersedes 初版 E18 的"115200 降速"建议**：初版误判 CH340 在 921600 位错误；实为 VOFA 端波特率不匹配。本机 921600 可用，以 921600 + DECIMATE=1 为准。E3/E5 的"921600 是修复"方向正确。
 
 > **深层根因见 E19**：E18 的"VOFA 误设 115200"是症状层；真正"为什么板子实际在发 115200（即便 `dbg_config.h` 已写 921600U）"是 `DBG_UART_BAUD` 的运行期覆盖被 `DBG_LOG_MOTOR` 宏门控、未开时整段变空实现——详见 E19。
+
+> ### ⚠ 2026-09-01 重测更正：帧宽 44→59 后，"DECIMATE=1 满速率"结论已失效
+> 上条"以 921600 + DECIMATE=1 为准"是在**窄帧（44ch）**下得出的；VOFA 遥测重构扩到 **59ch** 后不再成立。
+> 实测工具：`Components/Debug/Tools/analyze_vofa_59ch_20260901.py`（逐帧实测，非估算）。
+>
+> **实测数据**
+> - 59ch 单行长度 = **408 B**（含 `\n`），非早期估算的 473 B。
+> - 发送路径：`Dbg_Telemetry_Send()` → `BSP_LOG_UART1_SendPoll()`（`dbg_telemetry.c:192`）
+>   → `bsp_uart1_emit()`（`BSP_LOG.c:28-35`）**逐字节自旋等 TXE 后写 TDR**。
+> - 该发送**直接嵌在 200Hz 传感器任务体内**（`freertos.c:706`），非独立低优先级任务，也非 DMA/中断发送。
+>
+> **关键推论（CPU 占用，不只是带宽）**
+> - 408 B @ 921600(8N1, 10 bit/B) = **4.43 ms** 持续占用；TXE 流水写使线路始终饱和，4.43 ms 是硬下限。
+> - 姿态周期 = 1/`ATTITUDE_RATE_HZ`(200) = **5.00 ms** → **单周期 ~88.5% 被 UART 自旋占死**，
+>   留给 `MPU6050_ReadRaw` + `QMC5822_ReadRaw` + Madgwick + `Attitude_RunController` 仅 **~0.57 ms**。
+> - 且是**忙等自旋**（不触发 RTOS 让出），期间同/低优先级任务被饿死。
+> - 带宽占用 81.5 KB/s ÷ 92.2 KB/s = **88.5%**，余量不足以吸收 WARN/ERROR 文本突发。
+>
+> **后果（为什么必须改）**
+> - 传感器任务由二元信号量以 200Hz 放行（`freertos.c:691`）。循环体一旦 > 5 ms，
+>   **信号量 release 被丢弃（二元信号量不计数）→ 实际姿态更新率 < 200Hz**，
+>   而积分步长 `ydt = 1/ATTITUDE_RATE_HZ` 在 `attitude.c:340` 仍写死 5 ms
+>   → 运动状态下陀螺积分与 Madgwick 的 dt 偏小，姿态响应/增益失真。
+> - **静止时看不出来**：本次抓包 `yaw_gyro` 零漂移正是因为补偿后 `gz≈0`，
+>   dt 误差被"乘以 0"掩盖；一旦转动即暴露。
+>
+> **处置**
+> - **改回 `DBG_TELEMETRY_DECIMATE 2`**（与本节修复方案第 187 行一致）。
+>   → 100Hz × 408 B = 40.8 KB/s（44.2%），单周期发送降至 **2.21 ms**，余 2.8 ms 给算法。
+> - **本节第 195 行"恢复 1（满速率，最终实现）"与上条"以 DECIMATE=1 为准"在 59ch 帧下一律作废**；
+>   本条同时消除 E18 内部 187 行(=2) 与 195 行(=1) 的自相矛盾。
+> - **根治方案（另立事件评估）**：把 `bsp_uart1_emit` 逐字节自旋改为 **DMA 或 TXE 中断 + 环形缓冲**，
+>   可同时保留 200Hz 满速率与 CPU；改动涉及发送上下文（ISR 安全）需单独评审。
+> - 现状确认（2026-09-01）：`dbg_config.h:100` 实际值 = **1**，同行注释却写 "DECIMATE=2"——值与注释矛盾，待用户确认后修正。
 
 ---
 
@@ -441,7 +475,7 @@
 - `freertos.c` 原末行 `osThreadTerminate(NULL);` → **`osThreadTerminate(osThreadGetId());`**（传有效句柄 → CMSIS 走到 `vTaskDelete(hTask)` 删当前任务；行为等价裸 `vTaskDelete(NULL)`，但留在 CMSIS-RTOS2 抽象层、可移植）。
 - **全工程 8 处任务自删统一**为 `osThreadTerminate(osThreadGetId())`：7 个 `APP_ENABLE_X` 门控任务（StartInference/Motor/Network/Sensor/Screen/Flash/Esp32S3，函数体被 `#if` 裁空时自删，避免空函数 return 触发 `prvTaskExitError`）+ `StartTestTask`（POST 跑完真删，不长期占高优先级 8192B 栈+TCB）。
 - `INCLUDE_vTaskDelete=1` 已开（`FreeRTOSConfig.h`）；`osThreadGetId()` 本文件 `StartTestTask` 内已用（栈水位测量），符号可用、编译无忧。
-- 文档同步（防再误导）：`module_gating.md:19` / `Keil_MDK_ARM_工程排错记录.md:112` / `post_test.md:98` / `AI_deploy_开发规范与提示词.md:36` / `待处理.md:181/183/185` 全部改指 `osThreadTerminate(osThreadGetId())`；`freertos.c` 仅留一处反例注释说明"osThreadTerminate(NULL) 即 NO-OP"。
+- 文档同步（防再误导）：`module_gating.md:19` / `Components/Debug/Error/Error_Readme_idx.md:112` / `Components/POSTest/POST.md:98` / `待处理.md:181/183/185` 全部改指 `osThreadTerminate(osThreadGetId())`；`freertos.c` 仅留一处反例注释说明"osThreadTerminate(NULL) 即 NO-OP"。
 
 ### 铁律（防复发，已入项目日志）
 - 任务**自删当前任务**：用 `osThreadTerminate(osThreadGetId())`（CMSIS 抽象层、可移植）／等价裸 `vTaskDelete(NULL)`；**绝不用 `osThreadTerminate(NULL)`**（CMSIS 下 NULL=参数错 NO-OP → 落 `prvTaskExitError`）。
@@ -455,5 +489,162 @@
 - [x] 根因坐实（读 cmsis_os2.c：NULL 分支 NO-OP）
 - [x] 代码修复：`freertos.c` StartTestTask + 7 门控任务共 8 处统一 `osThreadTerminate(osThreadGetId())`
 - [x] 文档同步（6 处）+ 反例注释保留
-- [ ] 用户 Keil Rebuild + Download 验证：POST 后**不再进 `prvTaskExitError`**、`Task_Test` 真删、`Task_logger` 接管、`Task_Test stack: used=...` 应落线
+- [x] 用户 Keil Rebuild + Download 验证：POST 完整跑通，`Task_Test stack: used=704/4096` 已落线
+
+---
+
+## 事件 E28（真实 HardFault，已修）：`flash_hexdump` 栈缓冲溢出 → 返回地址被 `0x2E2E2E2E` 污染 → PRECISERR（2026-08-30）
+
+> **补盘说明**：本编号此前被 `crash_error.md:101` 与 `Error_Readme_idx.md:139/181` 引用，但详情从未落盘（悬空引用）。本次为真实故障，按 §4 铁律补齐。
+> **与旧引用描述的区分**：`Error_Readme_idx.md:181` 旧描述为"中断/异常上下文调不可重入串口打印 → 高速闪串口"，那是**取证手段**引发的问题；本事件主体是**业务代码栈溢出**（BFAR=0x2E2E2E2E），机制不同，勿混淆。
+
+### 现象（用户实测）
+- `debug3` 后**真实 HardFault**：`CFSR=PRECISERR+BFARVALID`、`HFSR=FORCED`、**`BFAR=0x2E2E2E2E`**。
+- POST 串口跑完 `Flash_Test step3 done: rc=0` 后断气，**停在 `HardFault_Handler` 的 `while(1)`**（`stm32h7xx_it.c:175`）。
+- 关键细节：日志 `0180: FF FF ...  ........` 的 ASCII 列**全是 `.`**；hexdump 只刷出 2 行（0160、0180）即止。
+
+### 根因（精确，代码实证）
+1. **`0x2E2E2E2E` = 4 个 `'.'`（ASCII 0x2E）拼成的 32 位字** —— 唯一产生源是 `selftest.c::flash_hexdump()` 的 ASCII 列三元表达式 `((c >= 0x20 && c < 0x7F) ? c : '.')`。黑匣子区未擦除处全 `0xFF`，非可打印 → 全部替换成 `'.'`。
+2. **缓冲容量不足 + size_t 下溢（双重缺陷）**：
+   - 单行实需 `6("%04X: ") + 48(16×"%02X ") + 1(" ") + 16(16×"%c") + 1(NUL)` = **72 字节**，而 `char line[64]` 只有 64。
+   - 更致命：`sizeof(line) - (size_t)n` 是**无符号减法**，当 `n > 64` 时**下溢为 SIZE_MAX**，`snprintf` 以为空间无限 → 越界写穿栈。
+   - `snprintf` 返回"本应写入数"而非"实际写入数"，`n +=` 累加后虚高，进一步放大越界。
+3. **栈余量过小**：`Task_Test` 栈当时 `256*4 = 1024` 字节（`freertos.c`；E24 注释写的 `2048*4=8192` 是陈旧注释）。32 行 hexdump 在**同一栈位置**反复溢出写 `0x2E` → 污染调用者 `Selftest_RunAll` 的栈帧（`e` 指针 / 返回地址）。
+4. **延迟爆发**：栈在 step1 就被写坏，但 step2/step3 仍"正常"跑完（破坏的是调用者帧，`Flash_Test` 自身局部尚可用）→ 崩在 `LOG_EMIT_DIRECT(..., "%s OK", e->name)` 或函数返回时 → 解引用 `0x2E2E2E2E` → 精确总线错误 → BusFault 未处理 → `HFSR=FORCED` 升级 HardFault。
+
+### 为什么"hexdump 只刷出 2 行"
+`LOG_I` 是 **Channel A 异步入环**；栈崩后 `Task_Test` 死掉，剩余 30 行**滞留环内永不落线**。串口行前缀被吃（`test.c:81) 0160:`）与 `JEDEC=...OK)FF FF FF` 穿插，同为栈破坏 + 异步交织表现。
+
+### 修复（用户实施，已验证 PASS）
+- `char line[64]` → `char line[96]`（覆盖 72 字节最坏行 + 余量）。
+- `Task_Test` 栈 `256*4` → `1024*4`（4096 字节）。
+- 验证：POST 全跑通（`=== Self-Test done ===`、`total elapsed=139 ms`、`Task_Test stack: used=704/4096 (free=3392)`）、`[FLASH] W25Q64 self-test PASSED`，**HardFault 消失**。
+
+### 关键规则（防复发）
+1. **`snprintf` 剩余空间一律用有符号 `int` 计算**：`int space = cap - n; if (space <= 0) break;` —— 无符号 `size_t` 减法下溢是本 bug 的放大器。
+2. **钳制返回值**：`r = snprintf(...); if (r < 0 || r >= space) break; n += r;`
+3. **容量由行宽公式派生**（根本解法，见待办）：改行宽时缓冲自动跟随，从不可能不够。
+4. **栈水位实测值不等于安全**：`osThreadGetStackSpace` 的 `used` 只反映合法栈指针范围内的高水位，**越界写穿不会被反映** —— "栈没爆" ≠ "没踩别人内存"。
+5. **异常上下文的 `while(1)` 是停机取证、不是 bug 本身**：本次用户误把 `HardFault_Handler` 的 `while(1)` 当故障点，真凶在进入 handler 之前。定位须读 `CFSR/BFAR`，不能停在死循环即止。
+
+### 待办（未执行，待用户决策）
+- `flash_hexdump` 行宽宏化 + 容量派生：
+  ```c
+  #define HEXDUMP_BYTES_PER_LINE  16U
+  #define HEXDUMP_LINE_LEN  (6U + 3U*HEXDUMP_BYTES_PER_LINE + 1U + HEXDUMP_BYTES_PER_LINE + 1U)  /* =72 */
+  #define HEXDUMP_LINE_BUF  (HEXDUMP_LINE_LEN + 24U)   /* =96，与已验证值一致 */
+  char line[HEXDUMP_LINE_BUF];
+  ```
+  再把 3 处硬编码 `16` 换成 `HEXDUMP_BYTES_PER_LINE`。可选加 `_Static_assert(sizeof(line) >= HEXDUMP_LINE_LEN, ...)`（C11）；若用块作用域 `typedef char x[cond?1:-1]` 需 `(void)sizeof(x);` 消除 clang `-Wunused-local-typedefs` 警告（项目要求 0 Warning）。
+
+### 状态
+- [x] 根因坐实（72>64 + size_t 下溢 + 0x2E 来源三重印证）
+- [x] 修复并验证（`line[96]` + 栈 4096，POST 全通、HardFault 消失）
+- [x] 本事件补盘（消除 E28 悬空引用）
+- [ ] `flash_hexdump` 行宽宏化（加固，非必需）
+- [ ] 修正 `Error_Readme_idx.md:181` 对 E28 的旧描述
+
+---
+
+## 事件 E29（规范违规，已修）：一次性自检用裸 `printf` → 脱离分级门控与黑匣子取证链（2026-08-30）
+
+> **判断纠正**：初轮称此现象"属预期，不影响功能"，**该判断不严谨，已收回**。裸 `printf` 在正常任务上下文属明确违规。
+
+### 现象
+- `BSP_W25Q64.c::W25QXX_Test()` 用 6 处裸 `printf("[W25Q TEST] ...")` 直发，仅有 `#ifdef LOG_ENABLED` 门控（**半吊子收口**：只做了门控，未做分级与黑匣子）。
+- 后果：其输出与 `LOG_I`（Channel A 异步入环）**分属两条通道**，串口顺序与真实执行顺序不一致 —— 用户日志中 `[W25Q TEST] PASS` 排到 `Task_Test stack: used=...` 之后，**差点误导取证**（误以为 Flash 自检在 POST 结束才跑）。
+
+### 根因（六条，按危害排序）
+1. **脱离分级门控**：`LOG_ENABLED` 未定义时 `LOG_*` 编译成 `((void)0)`；裸 `printf` 无条件编入，发布版静音不掉（违 §1.8）。
+2. **脱离双通道 → 黑匣子取证链断裂（最严重）**：`LOG_F/E` 走 Channel B，副本进 `s_crit_rb` 关键环，保证调度器异常时必落线；`printf` 直发**不进黑匣子** → 崩溃前现场永久丢失。黑匣子机制的意义被直接绕过。
+3. **脱离环形缓冲 → 同步阻塞调用者**：`fputc` 已重定向到 `bsp_uart1_emit`（`BSP_LOG.c:36`），与 `log_backend_putc` **共用同一底层**，均为轮询等 TXE。虽有 `guard=8000`（~20us）超时保护不会自旋，但 2.3KB hexdump 仍产生约 25ms 级阻塞，且**丢字无任何反馈**。
+4. **脱离统一格式**：无时间戳/级别/行号，不可过滤、不可排序、不可自动化分析，且 `debug<n>` 调级管不着它。
+5. **与 `LOG_*` 混用导致输出顺序失真**（本次已造成实际误导）。
+6. 违「一次性硬件自检优先走 logger 宏而非裸 printf」的工程规范。
+
+### 修复（已落地）
+- `BSP_W25Q64.c::W25QXX_Test()` 6 处裸 `printf` → `LOG_*`：
+  - 流程/通过信息 → `LOG_I("W25Q", ...)`（Channel A）
+  - **失败信息 → `LOG_E("W25Q", ...)`（Channel B：同步直发 + 副本进黑匣子）** —— Flash 硬件故障正是黑匣子该抓的东西
+- 去掉冗余的 `#ifdef LOG_ENABLED` 包裹（`LOG_*` 宏自带门控，代码更简洁）。
+- `BSP_W25Q64.c:2` 注释更新，标明"禁裸 printf，见 E28"。
+
+### 关键规则（防复发）
+1. **正常任务上下文：一律 `LOG_*`，禁裸 `printf` / 禁直接调 `log_backend_putc`。**
+2. **唯一例外**：HardFault handler、`HAL_UART_ErrorCallback` 等**异常上下文**必须用裸 `log_backend_putc` 轮询 —— 这是 §六 铁律（禁调 RTOS/阻塞 API）的**正确**要求，与业务层违规不可混为一谈。
+3. **失败/致命信息必须用 `LOG_E`/`LOG_F`**，否则不进黑匣子 = 取证链断裂。
+
+### 状态
+- [x] 根因与危害梳理（6 条）
+- [x] 修复落地（6 处 printf → LOG_I/LOG_E，失败路径进黑匣子）
+- [ ] 用户 Keil Rebuild + Download 验证：Flash 自检输出带 `[ts][I][W25Q]` 前缀、与 POST 日志顺序一致
+
+---
+
+## 事件 E30（设计缺陷，止血已落地）：UART4 接收未随 `APP_ENABLE_SCREEN` 门控 → 浮空 RX 触发 FE → ISR 内 `while(1)` 整机冻结（2026-08-30）
+
+### 现象
+- 全速运行后串口报：
+  ```
+  *** UART RX ERROR *** halt (NO NVIC_SystemReset)
+  huart=UART4(SCREEN) ErrorCode=0x00000004
+    FE=framing(波特/采样失步)
+  *** 报告一次，原地停机：attach J-Link 或断电。勿复位以保留现场 ***
+  ```
+- 此后 **`debug3` 无回显**、系统冻结。进 Keil 调试模式单步/暂停时正常，全速后才必现。
+
+### 根因（精确）
+1. **外设接收未随 L1 门控**：`main.c:161-166`（`USER CODE BEGIN 2` 块）原**无条件**执行 `HAL_UART_Receive_DMA(&huart4, rx_buf, RX4_BUFFER_SIZE)` + `__HAL_UART_ENABLE_IT(&huart4, UART_IT_IDLE)`，**无 `APP_ENABLE_SCREEN` 门控**。
+   - 对照 `main.c:178` 的 `Attitude_Init()` **有** `#if defined(APP_ENABLE_SENSOR)` 门控 → 门控范例存在，UART4 段是漏网之鱼。
+2. **硬件未就绪**：TJC 屏物理未接（`Doc/待处理.md` §4 为 ⬜ 待做项），`Pinout.md §3.5` 的 UART4_RX = **PA1 浮空** → 随机边沿被采成起始位、停止位非预期高电平 → **`FE`(framing)，ErrorCode=0x4**。
+3. **错误回调在 ISR 内 `while(1)`**：`Components/BSP/ESP/Src/uart_rx_dispatcher.c:94` 对所有 UART 一律停机。因 `HAL_UART_ErrorCallback` 运行于 **ISR 上下文**（`UART4_IRQn` 优先级 6，见 `Pinout.md:285`），`while(1)` 使 CPU 永卡中断态、**优先级高于所有 FreeRTOS 任务** → 调度器停 → `StartLoggerTask` 冻结 → `DbgConsole_Process()` 不执行 → **命令无人消费 → debug3 无回显**。
+4. **代码注释早已预见但未实现**：`uart_rx_dispatcher.c:44-45` 与 `91-93` 明写"UART4(屏) 的 DMA 接收错误也会进此回调并同样停机——若希望屏溢出非致命，需按 huart 实例分流"，但**分流从未落地**，TODO 变成实际故障。
+
+### 为什么"调试模式正常、全速才挂"
+FE 由浮空脚噪声触发，是**随机**的；暂停/单步时 UART4 尚未收到噪声，全速跑起来后迟早触发一次，触发即永久锁死。
+
+### 修复
+- **A（止血，已落地）**：`main.c:161-166` 加 `#if defined(APP_ENABLE_SCREEN) && APP_ENABLE_SCREEN` 门控 —— 非 SCREEN profile 下 UART4 根本不启动接收，FE 无从产生。
+  ```c
+  #if defined(APP_ENABLE_SCREEN) && APP_ENABLE_SCREEN
+      HAL_UART_Receive_DMA(&huart4, rx_buf, RX4_BUFFER_SIZE);
+      __HAL_UART_ENABLE_IT(&huart4, UART_IT_IDLE);
+  #endif
+  ```
+- **B（根治，已落地 2026-08-30）**：`HAL_UART_ErrorCallback` 按实例分级 —— `huart1/2/6`（关键链路）保留致命语义（任务上下文裁决）；`huart4`（可选外设）FE/ORE/NE 判为**非致命**，清错误标志 + `HAL_UART_Receive_DMA` 重启 + 计数上报后继续运行。
+- **C（治本，已落地 2026-08-30）**：ISR 内**永不** `while(1)` —— 错误回调只做「清标志 + 存 `volatile` 全局错误快照 `s_uart_err` + 按实例重启接收（`BSP_LOG_UART1_RxStart`/`ESP01S_UART_RxStart`/`ESP32S3_UART_RxStart`/UART4 DMA 重武装）」，致命性判断交任务上下文 `uart_err_monitor()`（由 `StartLoggerTask` 每轮调用）：非致命 → `LOG_W`+继续；关键链路连续错误 ≥ `UART_ERR_FATAL_THRESHOLD(=3)` → `LOG_E` + `logger_flush_to_flash()` + `NVIC_SystemReset()`。
+- **D（已由用户落地 2026-08-30）**：屏/引脚已物理接入，`Pinout.md` 层面无需改动；浮空根因物理消除，B+C 在此之上再加一层软件鲁棒性，二者互补。
+
+### 落地改动清单（2026-08-30）
+- `Components/BSP/ESP/Src/uart_rx_dispatcher.c`：`HAL_UART_ErrorCallback` 重写（删 `while(1)`/裸打印、`s_uart_err` 快照、`uart_err_recover()` 分级重启、`uart_err_monitor()` 任务侧裁决）；新增 `#include "logger.h"`、`extern uint8_t rx_buf[]`。
+- `Components/BSP/ESP/Inc/esp32s3.h` / `esp01s.h`：新增 `ESP32S3_UART_RxStart()` / `ESP01S_UART_RxStart()` 声明（返回 `HAL_StatusTypeDef`，ISR 安全）。
+- `Components/BSP/ESP/Src/esp32s3.c` / `esp01s.c`：抽出 `RxStart()`，回调与任务启动共用；删重复内联重武装。
+- `Core/Src/freertos.c` `StartLoggerTask`：每轮调用 `uart_err_monitor()`（USER CODE 块内，CubeMX 重生成安全）。
+
+### 可行性要点（已验证）
+- `UART4_IRQn` 优先级 **6** ≥ `configLIBRARY_MAX_SYSCALL_INTERRUPT_PRIORITY (5)`；方案实际**未依赖** `xxxFromISR` API（ISR 仅做 HAL 句柄操作 + 写 volatile 快照，零 RTOS 调用），故对全部 UART IRQ 优先级均安全，无需担心优先级越界导致 HardFault。
+- B 与 C 合并实现：ISR 零 RTOS 调用 + 任务侧裁决，比"ISR 发通知"更稳。
+
+### 验证（2026-08-30）
+- **致命路径（真实硬件）**：用户插拔 ESP32-S3(USART6@921600) 连线，日志稳定复现 `wedged after 6 errors -> flush blackbox + reset` 且 `ResetSrc=SFTRST`；黑匣子回读可见该 `LOG_E` 残片，证实"先落盘再复位"成立。
+- **非致命路径（软件注入）**：新增 `e4`/`e6` 控制台命令（`uart_err_inject_test()` 复用真实 ISR 路径），免 USB-TTL 即可验证 huart4(屏) 非致命恢复与 huart6 致命升级。
+- 结论：B+C 行为符合设计，【等待硬件实测】注释已删除。
+
+### 关键规则（防复发）
+1. **外设初始化/接收启动必须随 `APP_ENABLE_X` 联动**：L1 门控若只管任务函数体、不管外设收/发启动，等于"模块关了但硬件还在收数据"，是门控缺口。
+2. **ISR 内 `while(1)` 仅适用于必然致命场景**（HardFault）。UART 的 FE/ORE/NE 属**可恢复的线路噪声**，不应升级为整机死锁。
+3. **"停在死循环"要先分清 ISR 还是任务上下文**：ISR 内死循环冻结整个调度器（所有任务停摆 + 控制台无回显）；任务内死循环只影响该任务。
+4. **可选外设（屏/485/CAN）的错误应与关键链路（控制台/上云/图像）分级处理**，不可用同一把尺子。
+
+### 关联
+- **E3**（UART1 未共地 → 乱码）、**E18**（VOFA 波特率不匹配）、**E19**（`DBG_UART_BAUD` 被宏门控吞掉）同属串口链路族；本事件为该族首个"错误回调策略"类故障。
+- **`crash_error.md` §六**（异常上下文禁用阻塞/不可重入 API）是方案 C 的设计依据。
+
+### 状态
+- [x] 根因坐实（门控缺口 + RX 浮空 + ISR while(1) 三重叠加）
+- [x] A 止血落地（`main.c` 加 `APP_ENABLE_SCREEN` 门控，USER CODE 块内，CubeMX 重生成不丢）
+- [x] 可行性确认（UART4 IRQ prio 6 ≥ 5 → FromISR API 合法）
+- [x] B（按实例分级）/ C（ISR 永不 while(1)）—— 已落地（2026-08-30）
+- [x] 用户 Rebuild + Download 复测：`debug3` 回显恢复、UART RX ERROR 不再出现（2026-08-30）。**乌龙澄清**：用户一度误判"debug3 失效"实为误输 `debug5` 且烧录版 `LOG_COMPILE_MAX_LEVEL=INFO(3)` 被封顶到 3 的预期行为（非 bug）；`debug2`/`debug3` 已验证正常。
+- [x] e4/e6 注入命令编译期由 L3 宏 `DBG_UART_ERR_INJECT_TEST` 门控（需 `APP_ENABLE_SCREEN` / `APP_ENABLE_ESP32S3` 其一）；`APP_PROFILE_LOGGER` 等不含该外设的 profile 下整段不编译、零开销，满足"只在各自 APP 宏开启才开启"，同时保留"二次复现"能力（2026-08-30）。
 

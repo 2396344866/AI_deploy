@@ -10,6 +10,10 @@
 #include "logger.h"        /* LOG_I / LOG_W (task context) */
 #include "dbg_config.h"    /* DBG_LOG_ESP32S3 switch (unified debug scheme with Components/Debug) */
 #include "watchdog_heartbeat.h" /* 运行期存活探针：每收到一帧踢一次（TIM7 据此判 IWDG 是否喂） */
+#include <stdint.h>       /* 通用整数类型 */
+#include "cmsis_os2.h"    /* OS 类型 / 运行期探针 */
+#include "iwdg.h"         /* log_wdt_feed：POST 协作喂狗 */
+#include "app_config.h"   /* APP_ENABLE_ESP32S3：Esp32S3_Test 门控 */
 
 /* ====================== Static state ====================== */
 static uint8_t s_rx_buf[ESP32S3_RX_BUF_SIZE];      /* ReceiveToIdle_IT RX buffer */
@@ -21,6 +25,7 @@ static volatile uint32_t s_frames_ok = 0; /* Successfully parsed frame count (IS
 static volatile uint32_t s_crc_err   = 0; /* CRC verify fail count (ISR writes) */
 static volatile uint32_t s_ovf      = 0;  /* Queue-full drop count (ISR writes) */
 static uint32_t s_crc_err_logged = 0;     /* CRC err count already printed on task side */
+static volatile uint8_t g_link_validated = 0;  /* set when first valid frame parsed (runtime link ok) */
 
 #define ESP32S3_FLAG_RX  0x00000001U
 
@@ -118,6 +123,7 @@ static void esp32s3_fsm_feed(uint8_t b)
         uint16_t crc_calc = esp32s3_crc16(s_crcbuf, s_crc_len);
         if (crc_calc == crc_recv) {
             s_frames_ok++;
+            g_link_validated = 1U;
             esp32s3_emit(s_pay, (uint8_t)(s_len - 1U));   /* payload = L-1 */
         } else {
             s_crc_err++;
@@ -134,6 +140,13 @@ static void esp32s3_fsm_feed(uint8_t b)
 /* ====================== HAL callback (weak symbol override) ======================
  * USART6_IRQHandler is generated and calls HAL_UART_IRQHandler(&huart6),
  * IDLE/RX-complete lands in this callback. ISR only does: frame RX + enqueue + set flag + restart RX. */
+/* Re-arm USART6 RX. Used by RxCallback and by uart_rx_dispatcher error recovery.
+ * Returns HAL status; ISR-safe (same HAL call as inside RxCallback). */
+HAL_StatusTypeDef ESP32S3_UART_RxStart(void)
+{
+    return HAL_UARTEx_ReceiveToIdle_IT(&huart6, s_rx_buf, (uint16_t)sizeof(s_rx_buf));
+}
+
 void ESP32S3_UART_RxCallback(UART_HandleTypeDef *huart, uint16_t size)
 {
     if (huart != &huart6) return;
@@ -142,7 +155,7 @@ void ESP32S3_UART_RxCallback(UART_HandleTypeDef *huart, uint16_t size)
         esp32s3_fsm_feed(s_rx_buf[i]);
     }
     /* Restart RX (after ReceiveToIdle_IT finishes, UART returns to READY and must be re-enabled) */
-    HAL_UARTEx_ReceiveToIdle_IT(&huart6, s_rx_buf, (uint16_t)sizeof(s_rx_buf));
+    (void)ESP32S3_UART_RxStart();
     /* Wake parse task (ISR-safe API); Task_Esp32S3Handle is CubeMX-generated */
     (void)osThreadFlagsSet(Task_Esp32S3Handle, ESP32S3_FLAG_RX);
 }
@@ -154,7 +167,7 @@ void ESP32S3_Task_Run(void *argument)
     esp32s3_result_t res;
 
     /* Start RX only after kernel starts, avoid ISR touching OS primitives before scheduler is up */
-    if (HAL_UARTEx_ReceiveToIdle_IT(&huart6, s_rx_buf, (uint16_t)sizeof(s_rx_buf)) != HAL_OK) {
+    if (ESP32S3_UART_RxStart() != HAL_OK) {
         LOG_E("ESP32", "RX start failed");
         return;
     }
@@ -176,12 +189,27 @@ void ESP32S3_Task_Run(void *argument)
                   res.count ? res.obj[0].conf: 0U);
 #endif
         }
-#if DBG_LOG_ESP32S3 == 1
+    #if DBG_LOG_ESP32S3 == 1
         if (s_crc_err != s_crc_err_logged) {
             LOG_W("ESP32", "CRC err total=%lu", (unsigned long)s_crc_err);
             s_crc_err_logged = s_crc_err;
         }
-#endif
+    #endif
+        /* 运行期链路健康检查：上电 5s 内未收到任何合法帧 -> 目标检测降级（不依赖、不栽）。
+         * 帧由 ISR 收，正常 1s 内即有；超时仍 0 说明 ESP32-S3 未接/未启动/波特率错。 */
+        {
+            static uint32_t s_boot_ms = 0U;
+            static uint8_t  s_link_reported = 0U;
+            if (s_boot_ms == 0U) s_boot_ms = HAL_GetTick();
+            if (!s_link_reported && (HAL_GetTick() - s_boot_ms >= 5000U)) {
+                s_link_reported = 1U;
+                if (s_frames_ok == 0U) {
+                    LOG_W("ESP32", "objdet link NOT validated within 5s (frames_ok=0) -> object detection DEGRADED (robot continues without vision)");
+                } else {
+                    LOG_I("ESP32", "objdet link validated (frames_ok=%lu)", (unsigned long)s_frames_ok);
+                }
+            }
+        }
     }
 }
 
@@ -214,3 +242,55 @@ void ESP32S3_PrintStats(void)
           (unsigned long)s_frames_ok, (unsigned long)s_crc_err,
           (unsigned long)s_ovf, s_latest.count);
 }
+
+uint32_t ESP32S3_GetFrameCount(void)
+{
+    return s_frames_ok;
+}
+
+uint8_t ESP32S3_IsLinkValidated(void)
+{
+    return g_link_validated;
+}
+
+/* ===================== [迁移] ESP32-S3 自检：从 selftest.c 下沉到本组件（按 APP_ENABLE_ESP32S3 门控） ===================== */
+#if defined(APP_ENABLE_ESP32S3) && APP_ENABLE_ESP32S3
+int Esp32S3_Test(void)
+{
+#if DBG_LOG_POSTEST
+    LOG_EMIT_DIRECT(LOG_LVL_DEBUG, "D", "POSTEST", "Esp32S3_Test enter");
+#endif
+    log_wdt_feed();
+    /* ESP32S3_BSP_Init() 已在 MX_FREERTOS_Init 内、osKernelStart 前完成（队列+波特率）。
+       校验驱动链路：队列句柄有效 + 能取快照（不要求真有图像目标）。 */
+    /* 硬配置错：USART6 句柄未建 = CubeMX 根本没开 ESP32-S3 外设（仍非关键，不 halt）。 */
+    if (huart6.Instance == NULL) {
+        LOG_E("POSTEST", "ESP32S3 USART6 handle NULL (CubeMX ESP32S3 disabled?) -> config error");
+        return -1;
+    }
+    if (g_ImgResultImg_qHandle == NULL) {
+        LOG_E("POSTEST", "ESP32S3 image queue not created");
+        return -1;
+    }
+    esp32s3_result_t snap;
+    if (ESP32S3_GetLatest(&snap) != 0) {
+        LOG_E("POSTEST", "ESP32S3_GetLatest failed");
+        return -1;
+    }
+    (void)snap.count;   /* 快照已取 */
+    /* 模块详细统计仅在 DBG_LOG_ESP32S3=1 时打印（受逐任务门控；'X' 命令仍可显式调出）。 */
+#if DBG_LOG_ESP32S3 == 1
+    ESP32S3_PrintStats();
+#endif
+    /* POST 阶段设备尚未发帧（甚至可能未接），此处只报「驱动/软件链路 OK」；
+       真正的「物理链路通」由运行期 ESP32S3_Task_Run 的帧计数健康检查负责（见 esp32s3.c）。
+       以下 verbose 细节归 DBG_LOG_ESP32S3 门控（DEBUG 级，非 POSTEST）：DBG_LOG_ESP32S3=0 编译期删除。 */
+    uint32_t fok = ESP32S3_GetFrameCount();
+#if DBG_LOG_ESP32S3 == 1
+    LOG_EMIT_DIRECT(LOG_LVL_DEBUG, "D", "ESP32S3",
+        "driver OK (queue+snapshot); link NOT yet validated (frames_ok=%lu, checked at runtime in StartEsp32s3Task)",
+        (unsigned long)fok);
+#endif
+    return 0;
+}
+#endif

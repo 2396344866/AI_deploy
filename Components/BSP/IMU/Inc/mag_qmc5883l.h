@@ -16,8 +16,8 @@ extern I2C_HandleTypeDef hi2c1;
 #endif
 
 int     QMC5822_Init(void);
-int     QMC5822_ReadRaw(int16_t mag[3]);
-void    QMC5822_DumpStatus(void);
+int     QMC5822_ReadRaw(int16_t mag[3], int block);  /* block!=0 阻塞等锁(Init/诊断/SelfTest)；block==0 抢不到即失败丢帧(Sensor 热路径) */
+void    QMC5822_DumpStatus(int block);                /* block 同上；M 命令/诊断传 1 */
 uint8_t QMC5822_IsReady(void);   /* 1 = Init 成功探测到芯片 */
 
 #endif /* _MAG_QMC5883L_H */

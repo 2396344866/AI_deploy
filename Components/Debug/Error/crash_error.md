@@ -80,11 +80,33 @@
 
 ---
 
+## 六、中断/异常上下文禁用阻塞式与不可重入 API（尤其串口打印）
+
+### 机理
+- ISR/异常上下文（含 HardFault / NMI / 任意 IRQ）运行在特权级、**不可被调度剥夺**；调阻塞 API（等信号量/队列、`HAL_Delay`、`printf` 内部 malloc）会**死锁**（调度器停了，等待物永不到）。
+- 串口打印 `log_backend_putc` 轮询 `USART1->ISR/TDR`，**本身不可重入**（无串行锁）：
+  - 异常上下文调它 + drain 任务 / Channel B 直发路径并发 → **字节流在 UART 线交错**（现象：日志前缀被吃、乱序）。
+  - 若 USART 已故障（如 HardFault 由总线错引起）→ 二次 fault 或挂死（现象：HardFault 里卡 `bsp_uart1_emit` 的 `while(TXE)`、串口 921600 高速闪、PC 卡死无法关闭）。
+
+### 工程铁律（复用）
+- `HardFault_Handler` / 任意 ISR / `HAL_UART_ErrorCallback` 内：**只做"保存寄存器到全局 `volatile` + `while(1)`"**，
+  **不调 `log_backend_putc`、不调 `logger_flush_to_flash`、不调任何 HAL/RTOS 阻塞 API**。
+- 取证方式：把 `CFSR/HFSR/MMFAR/BFAR/PC/LR` 存入全局 `volatile`，停机后由 Keil Watch 读，或醒后由正常上下文打印。
+
+### 与 HardFault 取证的关系
+- 见本文件「四、HardFault 取证最小步骤」：取证在**正常调试会话**读寄存器，不在 handler 内打印。
+- handler 内打印看似"省一步"，实则制造新故障（高速闪串口 / 二次 fault），**务必止血**。
+
+### 关联实例
+- 具体实例（含 `debug3` 触发真实 HardFault、BFAR=0x2E2E2E2E、卡 `bsp_uart1_emit`）见 `Error/logger_error.md` **事件 E28**。
+
+---
+
 ## 附：文件关系
 
 ```
-Components/Debug/error.md                      运行期故障总导航（E 事件映射）
+Components/Debug/Error/Error_Readme_idx.md                      运行期故障总导航（E 事件映射）
 Components/Debug/Error/<TASK>_error.md         按任务的具体故障实例（事件 E N）
 Components/Debug/Error/crash_error.md          本文件：启动卡死 / HardFault 通用取证方法论
-Doc/Keil_MDK_ARM_工程排错记录.md               编译/工程配置期故障（问题 N）
+Components/Debug/Error/Error_Readme_idx.md               编译/工程配置期故障（问题 N）
 ```

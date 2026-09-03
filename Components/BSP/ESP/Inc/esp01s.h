@@ -20,11 +20,20 @@ extern "C" {
 #endif
 
 /* ====================== Config (set real values before flashing) ====================== */
-#define ESP01S_UART_BAUD        921600
-#define ESP01S_RX_BUF_SIZE      320     /* Ring RX buffer (filled by ISR, read by task) */
+/* 实际波特率以 CubeMX 生成的 usart.c 为准（huart2.Init.BaudRate = 115200）。
+   此宏仅作文档/核对用，改波特率请改 .ioc 并重新生成 Core，不要只改这里。 */
+#define ESP01S_UART_BAUD        115200
+/* Ring RX buffer (filled by ISR, read by task). 512 so a full Aliyun property/set
+ * PUBLISH (method+id+version+params, typically 150~300 B) fits without wrap. */
+#define ESP01S_RX_BUF_SIZE      512
 #define ESP01S_AT_TIMEOUT_MS    3000U   /* Single AT response wait timeout */
 #define ESP01S_NET_TIMEOUT_MS   8000U   /* Network / link setup timeout */
 
+/* WiFi STA / Aliyun MQTT 凭据：优先引入本地文件 esp01s_config_local.h（真实值，勿提交，已 gitignore）；
+ * 若该文件不存在（共享/CI 构建）则回落占位，仍可编译但连不上真实云。详见 esp01s.h.example。 */
+#if __has_include("esp01s_config_local.h")
+#include "esp01s_config_local.h"
+#else
 /* WiFi STA (placeholder) */
 #define ESP01S_WIFI_SSID        "YOUR_SSID"
 #define ESP01S_WIFI_PWD         "YOUR_PASSWORD"
@@ -35,8 +44,29 @@ extern "C" {
 #define ESP01S_MQTT_PORT        1883U
 #define ESP01S_MQTT_CLIENTID    "esp01s_h743"
 #define ESP01S_MQTT_USERNAME    "esp01s_h743&a1xxxx"
-#define ESP01S_MQTT_PASSWORD    "signmethod=hmacsha1,timestamp=1,<signature generated per Aliyun rules>"
-#define ESP01S_MQTT_PUB_TOPIC   "/sys/a1xxxx/esp01s_h743/thing/event/properties/post"
+#define ESP01S_MQTT_PASSWORD    "<signature generated per Aliyun rules>"
+#define ESP01S_MQTT_PUB_TOPIC   "/sys/a1xxxx/esp01s_h743/thing/event/property/post"
+#endif
+
+/* ====================== Aliyun 物模型 Topic（未在 local 头定义时按标准路径回落） ======================
+ * 标准路径（与 IoT 控制台「物模型通信 Topic 列表」一致）：
+ *   属性上报     /sys/{pk}/{dn}/thing/event/property/post          (PUB)
+ *   上报响应     /sys/{pk}/{dn}/thing/event/property/post_reply     (SUB)
+ *   属性设置     /sys/{pk}/{dn}/thing/service/property/set          (SUB)  ← 云端下发控制入口
+ *   设置响应     /sys/{pk}/{dn}/thing/service/property/set_reply    (PUB)
+ * 注：旧写法 properties/post（复数）不是标准物模型 topic，须用单数 property/post。
+ */
+#ifndef ESP01S_MQTT_SUB_TOPIC
+#define ESP01S_MQTT_SUB_TOPIC   "/sys/a1xxxx/esp01s_h743/thing/service/property/set"
+#endif
+#ifndef ESP01S_MQTT_SET_REPLY_TOPIC
+#define ESP01S_MQTT_SET_REPLY_TOPIC "/sys/a1xxxx/esp01s_h743/thing/service/property/set_reply"
+#endif
+/* 自定义 topic：推理指标 + 姿态（不进物模型，云端用规则引擎转发/AMQP 消费）。
+   与物模型属性上报分开，避免未定义标识符被物模型解析器拒绝。 */
+#ifndef ESP01S_MQTT_PUB_TOPIC_INFER
+#define ESP01S_MQTT_PUB_TOPIC_INFER "/a1xxxx/esp01s_h743/user/infer"
+#endif
 
 /* ====================== Error codes ====================== */
 typedef enum {
@@ -56,11 +86,103 @@ int  ESP01S_SendAT(const char *cmd, char *resp, uint32_t timeout_ms);
 int  ESP01S_ConnectTCP(const char *host, uint16_t port);  /* AT+CIPSTART TCP */
 int  ESP01S_MQTT_Connect(void);  /* Switch to transparent mode + send MQTT CONNECT, wait for CONNACK */
 int  ESP01S_MQTT_Pub(const char *topic, const char *json); /* Send PUBLISH QoS0 in transparent mode */
+
+/* Send SUBSCRIBE (QoS0) for one topic; waits SUBACK. Call after MQTT CONNACK. */
+int  ESP01S_MQTT_Sub(const char *topic);
+
+/* Send PINGREQ keepalive (0xC0 0x00). Must be called more often than the CONNECT
+ * keepalive (60 s) or the broker silently drops the link; send every ~50 s. */
+int  ESP01S_MQTT_Ping(void);
+
+/* Poll one downlink PUBLISH (QoS0) from the RX ring.
+ *   topic/payload are NUL-terminated on success (payload buffers must allow +1).
+ *   Returns ESP01S_OK (got one) / ESP01S_ERR_NORESP (nothing complete yet, or a
+ *   non-PUBLISH packet was consumed) / ESP01S_ERR_PARAM / ESP01S_ERR_TIMEOUT.
+ * Non-PUBLISH packets (PINGRESP/SUBACK/...) are skipped internally so the ring
+ * never stalls on an unconsumed header. */
+int  ESP01S_MQTT_PollPublish(char *topic, uint16_t topic_max,
+                             char *payload, uint16_t payload_max,
+                             uint16_t *topic_len, uint16_t *payload_len);
+
 int  ESP01S_SendRaw(const uint8_t *data, uint16_t len);    /* Transparent-mode binary-safe send (raw MQTT packet) */
+
+/* ====================== 阿里云物模型「属性」路由 ======================
+ * 云端 property/set → 本地动作；本地状态 → property/post 上报。
+ * 映射（复用控制台已发布标识符，不新建物模型）：
+ *   LED_1               -> LED_R()                  读写 bool
+ *   balance_enable      -> 发站起/坐下意图(Attitude_SetCloudStand/Sit)，由 FSM 仲裁  读写 bool
+ *   Euler_angle_Pitch   -> Attitude_GetPitch()      只读 float
+ *   Euler_angle_Roll    -> Attitude_GetRoll()       只读 float
+ *   Euler_angle_Yaw     -> Attitude_GetYaw()        只读 float
+ *   move_stop           -> Motor_EmergencyStop()    读写 bool
+ *   move_on / move_back -> 双轮前进 / 后退           读写 bool
+ *   move_left_rotate    -> 原地左转                 读写 bool
+ *   move_right_rotate   -> 原地右转                 读写 bool
+ *   temp                -> MPU6050 芯片温度         只读 float
+ *
+ * 电机方向按实测「中心对称」(motor_debug.md: A50=左轮前进 / B50=右轮后退)：
+ *   前进 A=+S,B=-S   后退 A=-S,B=+S   原地左转 A=-S,B=-S   原地右转 A=+S,B=+S
+ *
+ * 无实体的传感器（超声波/烟雾/光强/温湿度 DHT/压力/水流量/舵机）刻意不映射：
+ * 伪造数据会污染云端曲线，宁缺毋滥。详见 Doc/阿里云物模型属性映射.md。
+ *
+ * 注：路由表收进 ESP01S 模块（不再单列 aliot_property.*），代价是 BSP 层依赖
+ * motor/attitude/led；本项目 ESP01S 为专用模块，接受此耦合以换取单一文件、免改工程。
+ * ==================================================================== */
+
+/* 单动作默认速度（计数/节拍，与 Motor_SetSpeed 同量纲）。
+   物模型 move_* 是 bool，只能表达"做/不做"，速度取固定值。 */
+#ifndef ESP01S_ALIIOT_MOTION_SPEED
+#define ESP01S_ALIIOT_MOTION_SPEED   120
+#endif
+
+/* 帧缓冲尺寸（Task_Network 栈仅 2048 B，调用方请用 static 缓冲） */
+#define ESP01S_TOPIC_MAX      96     /* 下行 topic（含 NUL） */
+#define ESP01S_PAYLOAD_MAX    320    /* 下行 payload（阿里云 set 帧通常 150~300 B） */
+#define ESP01S_JSON_MAX       448    /* 属性上报 JSON */
+#define ESP01S_REPLY_MAX      128    /* set_reply JSON */
+
+/* 属性索引（与 esp01s.c 的 s_prop_desc[] 顺序一致） */
+typedef enum {
+    ESP01S_PROP_LED = 0,
+    ESP01S_PROP_EULER_OPEN,
+    ESP01S_PROP_PITCH,
+    ESP01S_PROP_ROLL,
+    ESP01S_PROP_YAW,
+    ESP01S_PROP_MOVE_STOP,
+    ESP01S_PROP_MOVE_ON,
+    ESP01S_PROP_MOVE_BACK,
+    ESP01S_PROP_MOVE_LEFT,
+    ESP01S_PROP_MOVE_RIGHT,
+    ESP01S_PROP_TEMP,
+    ESP01S_PROP_COUNT
+} esp01s_prop_t;
+
+/* 初始化属性状态（LED 灭、电机停机）。网络任务启动时调用一次。 */
+void ESP01S_AliIot_Init(void);
+
+/* 处理一条 property/set 下行 payload：解析 id/params → 调 setter → 组装 set_reply
+ * （{"id":"..","code":200,"data":{}}）写入 reply。返回命中属性个数（0=无可识别属性）。 */
+int  ESP01S_AliIot_HandleSet(const char *payload, char *reply, uint16_t reply_max);
+
+/* 构造属性上报 JSON（thing.event.property.post 格式）。返回长度，<=0 失败。 */
+int  ESP01S_AliIot_BuildReport(char *buf, uint16_t max);
+
+/* 由 Task_Sensor 每拍喂入 MPU6050 温度原始值（复用已有 I2C 读取，不新增总线访问）。
+ * 换算：T(℃) = raw / 340 + 36.53（MPU6050 datasheet）。 */
+void ESP01S_AliIot_UpdateTempRaw(int16_t mpu_temp_raw);
 
 /* USART2 IDLE RX callback (forwarded here by HAL_UARTEx_RxEventCallback in
  * Components/BSP/uart_rx_dispatcher.c; ISR context). */
 void ESP01S_UART_RxCallback(UART_HandleTypeDef *huart, uint16_t size);
+
+/* Re-arm USART2 RX after an error (called from Components/BSP/uart_rx_dispatcher.c
+ * error recovery). Returns HAL status; safe in ISR context. */
+HAL_StatusTypeDef ESP01S_UART_RxStart(void);
+
+/* POST 网络自检入口（按 APP_ENABLE_NETWORK 门控）：仅非线缆检查（USART2 句柄就绪性）。
+ * 完整 AT/MQTT 握手指由 StartNetworkTask 异步完成。实现见 esp01s.c 尾部。 */
+int Network_Test(void);
 
 #ifdef __cplusplus
 }

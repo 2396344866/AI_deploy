@@ -42,6 +42,11 @@ void MX_IWDG1_Init(void);
 
 /* USER CODE BEGIN Prototypes */
 
+/* IWDG 启动（POST 开始时调用）——上电早期刻意不启动，原因见 iwdg.c 的 IWDG_Start()。
+ * 总闸 APP_ENABLE_WATCHDOG=0 时本函数为空操作（调试关狗，等价于改造前行为）。 */
+void IWDG_Start(void);
+int  IWDG_IsRunning(void);   /* 1=IWDG 已在跑（喂狗接口生效）；0=未启动（喂狗为 no-op） */
+
 /* USER CODE END Prototypes */
 
 #ifdef __cplusplus

@@ -1,8 +1,8 @@
 # DIAG 任务运行期故障归档（推理 / Inference）
 
 > 本文件是 **DIAG 任务**（StartInferenceTask，离线故障诊断 INT8 模型测试）的运行期故障归属地，
-> 事件用全局连续编号 **E N**（与 `Components/Debug/error.md` 一致）。
-> 编译期故障归 `Doc/Keil_MDK_ARM_工程排错记录.md`（问题 N）；启动死机取证归 `Components/Debug/Error/crash_error.md`。
+> 事件用全局连续编号 **E N**（与 `Components/Debug/Error/Error_Readme_idx.md` 一致）。
+> 编译期故障归 `Components/Debug/Error/Error_Readme_idx.md`（问题 N）；启动死机取证归 `Components/Debug/Error/crash_error.md`。
 
 ---
 

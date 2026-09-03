@@ -4922,20 +4922,25 @@
               <FileType>1</FileType>
               <FilePath>..\Components\BSP\ESP\Src\uart_rx_dispatcher.c</FilePath>
             </File>
+            <File>
+              <FileName>esp01s_config_local.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>..\Components\BSP\ESP\Inc\esp01s_config_local.h</FilePath>
+            </File>
           </Files>
         </Group>
         <Group>
           <GroupName>POSTest</GroupName>
           <Files>
             <File>
-              <FileName>selftest.c</FileName>
+              <FileName>Postest.c</FileName>
               <FileType>1</FileType>
-              <FilePath>..\Components\POSTest\Src\selftest.c</FilePath>
+              <FilePath>..\Components\POSTest\Src\Postest.c</FilePath>
             </File>
             <File>
-              <FileName>selftest.h</FileName>
+              <FileName>Postest.h</FileName>
               <FileType>5</FileType>
-              <FilePath>..\Components\POSTest\Inc\selftest.h</FilePath>
+              <FilePath>..\Components\POSTest\Inc\Postest.h</FilePath>
             </File>
           </Files>
         </Group>

@@ -1,17 +1,20 @@
 #include "BSP_W25Q64.h"
-#include "logger.h"        // ×Ô¼ì´òÓ¡ÓÃ #ifdef LOG_ENABLED ¿ØÖÆ£¨Éú²úÄ£Ê½±ä¿Õ£©
-#include "cmsis_os2.h" 
+#include "logger.h"        // è‡ªæ£€æ‰“å°ç»Ÿä¸€èµ° LOG_*ï¼šé—¨æ§/åˆ†çº§/æ—¶é—´æˆ³/é»‘åŒ£å­å…¨é“¾è·¯ï¼›ç¦è£¸ printfï¼ˆè§ Error/logger_error.md E28ï¼‰
+#include "cmsis_os2.h"
+#include "app_config.h"    /* APP_ENABLE_FLASHï¼šFlash_Test é—¨æ§ */
+#include "dbg_config.h"    /* DBG_LOG_FLASH */
+#include "iwdg.h"          /* log_wdt_feedï¼šPOST åä½œå–‚ç‹— */
 
 __ALIGNED(32) static uint8_t g_flashTxBuf[SPI_FLASH_PerWritePageSize];
-// D-Cache ÇåÀí·â×°£ºDMA Æô¶¯Ç°±Øµ÷ÓÃ£¬È·±£ DMA ¶Áµ½×îĞÂÊı¾İ
+// D-Cache æ¸…ç†å°è£…ï¼šDMA å¯åŠ¨å‰å¿…è°ƒç”¨ï¼Œç¡®ä¿ DMA è¯»åˆ°æœ€æ–°æ•°æ®
 static void Flash_CleanTxBuf(uint32_t len){
     SCB_CleanDCache_by_Addr((uint32_t*)g_flashTxBuf, (int32_t)len);
 }
 
-// RX DMA Ê¹ÓÃµÄÄÚ²¿¶ÔÆë»º³å£¨Óë TX Í¬Àí£º32 ×Ö½Ú¶ÔÆë + ÂäÔÚ AXI/D2 SRAM£¬DMA ²Å¿É´ï£©
+// RX DMA ä½¿ç”¨çš„å†…éƒ¨å¯¹é½ç¼“å†²ï¼ˆä¸ TX åŒç†ï¼š32 å­—èŠ‚å¯¹é½ + è½åœ¨ AXI/D2 SRAMï¼ŒDMA æ‰å¯è¾¾ï¼‰
 __ALIGNED(32) static uint8_t g_flashRxBuf[SPI_FLASH_PerWritePageSize];
-// D-Cache Ê§Ğ§·â×°£ºRX Óë TX ·½ÏòÏà·´¡ª¡ªÆô¶¯ DMA Ç°¶ªÆú¾É»º´æ£¬
-// ±£Ö¤ DMA °ÑÊı¾İĞ´Èë RAM ºó£¬CPU ¶Áµ½µÄ²»ÊÇ»º´æÀïµÄ³Â¾É¸±±¾
+// D-Cache å¤±æ•ˆå°è£…ï¼šRX ä¸ TX æ–¹å‘ç›¸åâ€”â€”å¯åŠ¨ DMA å‰ä¸¢å¼ƒæ—§ç¼“å­˜ï¼Œ
+// ä¿è¯ DMA æŠŠæ•°æ®å†™å…¥ RAM åï¼ŒCPU è¯»åˆ°çš„ä¸æ˜¯ç¼“å­˜é‡Œçš„é™ˆæ—§å‰¯æœ¬
 static void Flash_InvalidateRxBuf(uint32_t len){
     SCB_InvalidateDCache_by_Addr((uint32_t*)g_flashRxBuf, (int32_t)len);
 }
@@ -22,91 +25,91 @@ extern  osSemaphoreId_t g_semFlashDmaDoneHandle;
 uint8_t W25QXX_ReadWriteByte(uint8_t TxData){
     uint8_t RxData = 0;
 		HAL_SPI_TransmitReceive(&hspi1, &TxData, &RxData, 1, 50);  
-    // ÇëÔÚ´Ë´¦Ê¹ÓÃ HAL ¿âµÄÂÖÑ¯ÊÕ·¢º¯Êı£¨HAL_SPI_TransmitReceive£©À´Íê³Éµ¥×Ö½Ú½»»»
-    // ³¬Ê±Ê±¼ä¿ÉÒÔÉèÎª 100ms (100)
-    // ÌáÊ¾£ºĞèÒª´«Èë &hspi1¡¢·¢ËÍÖ¸Õë¡¢½ÓÊÕÖ¸Õë¡¢Êı¾İ³¤¶È(1)¡¢³¬Ê±Ê±¼ä
+    // è¯·åœ¨æ­¤å¤„ä½¿ç”¨ HAL åº“çš„è½®è¯¢æ”¶å‘å‡½æ•°ï¼ˆHAL_SPI_TransmitReceiveï¼‰æ¥å®Œæˆå•å­—èŠ‚äº¤æ¢
+    // è¶…æ—¶æ—¶é—´å¯ä»¥è®¾ä¸º 100ms (100)
+    // æç¤ºï¼šéœ€è¦ä¼ å…¥ &hspi1ã€å‘é€æŒ‡é’ˆã€æ¥æ”¶æŒ‡é’ˆã€æ•°æ®é•¿åº¦(1)ã€è¶…æ—¶æ—¶é—´
     return RxData;
 }
 
 uint32_t W25QXX_ReadJedecID(void){
     uint32_t temp = 0;
     uint8_t temp0 = 0, temp1 = 0, temp2 = 0;
-    // 1. À­µÍÆ¬Ñ¡
+    // 1. æ‹‰ä½ç‰‡é€‰
 		W25QXX_CS_LOW();
-    // 2. ·¢ËÍ 0x9F Ö¸Áî (Ê¹ÓÃÄãµÄ W25QXX_ReadWriteByte)
+    // 2. å‘é€ 0x9F æŒ‡ä»¤ (ä½¿ç”¨ä½ çš„ W25QXX_ReadWriteByte)
 		W25QXX_ReadWriteByte(W25X_JedecDeviceID);
-    // 3. Á¬Ğø¶ÁÈ¡ 3 ¸ö×Ö½ÚµÄÊı¾İ (·¢ËÍ Dummy_Byte »»»ØÊı¾İ)
-		// µÚÒ»¸ö×Ö½Ú£º³§ÉÌ ID£¨Winbond µÄ¹Ì¶¨´úºÅ 0xEF£©¡£  
-		// µÚ¶ş¸ö×Ö½Ú£ºÄÚ´æÀàĞÍ£¨Memory Type£©¡£  
-		// µÚÈı¸ö×Ö½Ú£ºĞ¾Æ¬ÈİÁ¿£¨Capacity£¬Èç W25Q16 µÄÈİÁ¿´úºÅ£©¡£  
+    // 3. è¿ç»­è¯»å– 3 ä¸ªå­—èŠ‚çš„æ•°æ® (å‘é€ Dummy_Byte æ¢å›æ•°æ®)
+		// ç¬¬ä¸€ä¸ªå­—èŠ‚ï¼šå‚å•† IDï¼ˆWinbond çš„å›ºå®šä»£å· 0xEFï¼‰ã€‚  
+		// ç¬¬äºŒä¸ªå­—èŠ‚ï¼šå†…å­˜ç±»å‹ï¼ˆMemory Typeï¼‰ã€‚  
+		// ç¬¬ä¸‰ä¸ªå­—èŠ‚ï¼šèŠ¯ç‰‡å®¹é‡ï¼ˆCapacityï¼Œå¦‚ W25Q16 çš„å®¹é‡ä»£å·ï¼‰ã€‚  
     temp0 = W25QXX_ReadWriteByte(Dummy_Byte);
 		temp1 = W25QXX_ReadWriteByte(Dummy_Byte);
 		temp2 = W25QXX_ReadWriteByte(Dummy_Byte);
-    // 4. À­¸ßÆ¬Ñ¡
+    // 4. æ‹‰é«˜ç‰‡é€‰
     W25QXX_CS_HIGH();
-    // 5. ½«Èı¸ö×Ö½Ú°´Î»»òÆ´½ÓÎªÒ»¸ö 32 Î»ÕûĞÍ·µ»Ø (ÀıÈç: (temp0 << 16) | (temp1 << 8) | temp2)
+    // 5. å°†ä¸‰ä¸ªå­—èŠ‚æŒ‰ä½æˆ–æ‹¼æ¥ä¸ºä¸€ä¸ª 32 ä½æ•´å‹è¿”å› (ä¾‹å¦‚: (temp0 << 16) | (temp1 << 8) | temp2)
 		temp = ((uint32_t)temp0 << 16) | ((uint32_t)temp1 << 8) | temp2;
     return temp;
 }
 
 
 void W25QXX_WriteEnable(void){
-    // 1. À­µÍÆ¬Ñ¡
+    // 1. æ‹‰ä½ç‰‡é€‰
 		W25QXX_CS_LOW();
-    // 2. ·¢ËÍ W25X_WriteEnable Ö¸Áî
+    // 2. å‘é€ W25X_WriteEnable æŒ‡ä»¤
 		W25QXX_ReadWriteByte(W25X_WriteEnable);
-    // 3. À­¸ßÆ¬Ñ¡
+    // 3. æ‹‰é«˜ç‰‡é€‰
     W25QXX_CS_HIGH();
 }
 
 
 void W25QXX_WaitForWriteEnd(void){
     uint8_t FLASH_Status = 0;
-    /* ¿´ÃÅ¹·°²È«£ºÔ­ do-while ÎŞ³¬Ê±£¬ÈôĞ¾Æ¬ÎŞÏìÓ¦(Èç DO/MISO Ğü¿Õ¶Áµ½0xFF -> WIPºã1)
-     * »áÓÀ¾ÃÃ¦µÈ£»¸Ãº¯ÊıÔËĞĞÔÚ Task_Test(HIGH) ÖĞ²»ÈÃ³ö CPU -> ×îµÍÓÅÏÈ¼¶ Logger ¶öËÀ
-     * -> IWDG(¡Ö4.1s)¸´Î» -> ÉÏµç´òÓ¡Ñ­»·¡£¼Ó³¬Ê±£ºÉÈÇø²Á³ıµäĞÍ<400ms£¬1.5s Îª°²È«ÉÏÏŞ¡£ */
+    /* çœ‹é—¨ç‹—å®‰å…¨ï¼šåŸ do-while æ— è¶…æ—¶ï¼Œè‹¥èŠ¯ç‰‡æ— å“åº”(å¦‚ DO/MISO æ‚¬ç©ºè¯»åˆ°0xFF -> WIPæ’1)
+     * ä¼šæ°¸ä¹…å¿™ç­‰ï¼›è¯¥å‡½æ•°è¿è¡Œåœ¨ Task_Test(HIGH) ä¸­ä¸è®©å‡º CPU -> æœ€ä½ä¼˜å…ˆçº§ Logger é¥¿æ­»
+     * -> IWDG(â‰ˆ4.1s)å¤ä½ -> ä¸Šç”µæ‰“å°å¾ªç¯ã€‚åŠ è¶…æ—¶ï¼šæ‰‡åŒºæ“¦é™¤å…¸å‹<400msï¼Œ1.5s ä¸ºå®‰å…¨ä¸Šé™ã€‚ */
     uint32_t start_tick = HAL_GetTick();
     uint32_t retry = 0U;
-    const uint32_t W25Q_WAIT_TIMEOUT_MS = 1500U;    /* ³£¹æ(RTOS)³¬Ê±£¬SysTick ×ßÊ±¼´ÉúĞ§ */
-    const uint32_t W25Q_WAIT_RETRY_MAX  = 100000UL; /* HardFault/SysTick Í£°ÚÊ±µÄÓ²¶µµ× */
-    // 1. À­µÍÆ¬Ñ¡
+    const uint32_t W25Q_WAIT_TIMEOUT_MS = 1500U;    /* å¸¸è§„(RTOS)è¶…æ—¶ï¼ŒSysTick èµ°æ—¶å³ç”Ÿæ•ˆ */
+    const uint32_t W25Q_WAIT_RETRY_MAX  = 100000UL; /* HardFault/SysTick åœæ‘†æ—¶çš„ç¡¬å…œåº• */
+    // 1. æ‹‰ä½ç‰‡é€‰
 		W25QXX_CS_LOW();
-    // 2. ·¢ËÍ¶ÁÈ¡×´Ì¬¼Ä´æÆ÷Ö¸Áî
+    // 2. å‘é€è¯»å–çŠ¶æ€å¯„å­˜å™¨æŒ‡ä»¤
 		W25QXX_ReadWriteByte(W25X_ReadStatusReg);
-		//	¸ù¾İ Êı¾İÊÖ²á£¬Ïò Flash ·¢ËÍ¶ÁÈ¡×´Ì¬¼Ä´æÆ÷Ö¸Áî£¨0x05£©ºó£¬
-		//	´Ó»ú»á·µ»ØÒ»¸ö×Ö½ÚµÄ×´Ì¬¼Ä´æÆ÷ÄÚÈİ£¨¼´ Status Register-1£©
-		// 0x01 ±íÊ¾ÎÒÃÇÖ»ĞèÒª¶ÁÈ¡µÚÒ»Î» Ö»ÒªµÚÒ»Î»ÊÇ 0¾Í±íÊ¾¿ÕÏĞ±íÊ¾´«ÊäÍê±Ï  1±íÊ¾Ã¦Âµ 
+		//	æ ¹æ® æ•°æ®æ‰‹å†Œï¼Œå‘ Flash å‘é€è¯»å–çŠ¶æ€å¯„å­˜å™¨æŒ‡ä»¤ï¼ˆ0x05ï¼‰åï¼Œ
+		//	ä»æœºä¼šè¿”å›ä¸€ä¸ªå­—èŠ‚çš„çŠ¶æ€å¯„å­˜å™¨å†…å®¹ï¼ˆå³ Status Register-1ï¼‰
+		// 0x01 è¡¨ç¤ºæˆ‘ä»¬åªéœ€è¦è¯»å–ç¬¬ä¸€ä½ åªè¦ç¬¬ä¸€ä½æ˜¯ 0å°±è¡¨ç¤ºç©ºé—²è¡¨ç¤ºä¼ è¾“å®Œæ¯•  1è¡¨ç¤ºå¿™ç¢Œ 
 		do{
 				FLASH_Status = W25QXX_ReadWriteByte(Dummy_Byte);
-				if (++retry > W25Q_WAIT_RETRY_MAX) break;                 /* HardFault/SysTick Í£°Ú¶µµ× */
-				if ((HAL_GetTick() - start_tick) > W25Q_WAIT_TIMEOUT_MS) break; /* ³£¹æ³¬Ê±£¬±ÜÃâ¶öËÀ¿´ÃÅ¹· */
+				if (++retry > W25Q_WAIT_RETRY_MAX) break;                 /* HardFault/SysTick åœæ‘†å…œåº• */
+				if ((HAL_GetTick() - start_tick) > W25Q_WAIT_TIMEOUT_MS) break; /* å¸¸è§„è¶…æ—¶ï¼Œé¿å…é¥¿æ­»çœ‹é—¨ç‹— */
 		}while((FLASH_Status & 0x01) == SET);
-    // 3. À­¸ßÆ¬Ñ¡
+    // 3. æ‹‰é«˜ç‰‡é€‰
     W25QXX_CS_HIGH();
 }
 
 
 /**
- * @brief  ²Á³ıÖ¸¶¨µÄÒ»¸öÉÈÇø (4KB)
- * @param  SectorAddr: ÉÈÇøµØÖ·£¨±ØĞëÊÇ 4KB ¶ÔÆëµÄµØÖ·£¬ÀıÈç 0x000000¡¢0x001000 µÈ£©
- * @retval ÎŞ
+ * @brief  æ“¦é™¤æŒ‡å®šçš„ä¸€ä¸ªæ‰‡åŒº (4KB)
+ * @param  SectorAddr: æ‰‡åŒºåœ°å€ï¼ˆå¿…é¡»æ˜¯ 4KB å¯¹é½çš„åœ°å€ï¼Œä¾‹å¦‚ 0x000000ã€0x001000 ç­‰ï¼‰
+ * @retval æ— 
  */
 void W25QXX_SectorErase(uint32_t SectorAddr){
-    // 1. ·¢ËÍĞ´Ê¹ÄÜ
+    // 1. å‘é€å†™ä½¿èƒ½
     W25QXX_WriteEnable();
-    // 2. µÈ´ıĞ´Ê¹ÄÜÍê³É£¨»òÖ±½Ó×¢ÊÍ¸Ä´úÂë£¬ÒÀ¿¿Ğ¾Æ¬ÏìÓ¦£¬Í¨³£Ğ´Ê¹ÄÜºó¿ÉÖ±½Ó·¢²Á³ı£©
+    // 2. ç­‰å¾…å†™ä½¿èƒ½å®Œæˆï¼ˆæˆ–ç›´æ¥æ³¨é‡Šæ”¹ä»£ç ï¼Œä¾é èŠ¯ç‰‡å“åº”ï¼Œé€šå¸¸å†™ä½¿èƒ½åå¯ç›´æ¥å‘æ“¦é™¤ï¼‰
     W25QXX_WaitForWriteEnd();
-    // 3. À­µÍÆ¬Ñ¡
+    // 3. æ‹‰ä½ç‰‡é€‰
     W25QXX_CS_LOW();
-    // 4. ·¢ËÍÉÈÇø²Á³ıÖ¸Áî (0x20)
+    // 4. å‘é€æ‰‡åŒºæ“¦é™¤æŒ‡ä»¤ (0x20)
     W25QXX_ReadWriteByte(W25X_SectorErase);
-    // 5. ÒÀ´Î·¢ËÍ 24 Î»µØÖ·µÄ¸ß 8 Î»¡¢ÖĞ 8 Î»¡¢µÍ 8 Î»
+    // 5. ä¾æ¬¡å‘é€ 24 ä½åœ°å€çš„é«˜ 8 ä½ã€ä¸­ 8 ä½ã€ä½ 8 ä½
     W25QXX_ReadWriteByte((SectorAddr >> 16) & 0xFF);
 		W25QXX_ReadWriteByte((SectorAddr >> 8) & 0xFF);
 		W25QXX_ReadWriteByte(SectorAddr & 0xFF);
-    // 6. À­¸ßÆ¬Ñ¡
+    // 6. æ‹‰é«˜ç‰‡é€‰
     W25QXX_CS_HIGH();
-    // 7. µÈ´ı²Á³ı½áÊø (µ÷ÓÃ W25QXX_WaitForWriteEnd)
+    // 7. ç­‰å¾…æ“¦é™¤ç»“æŸ (è°ƒç”¨ W25QXX_WaitForWriteEnd)
 		W25QXX_WaitForWriteEnd();
 }
 
@@ -127,28 +130,28 @@ void W25QXX_BulkErase(void){
 
 
 /**
- * @brief  Ïò W25QXX Ğ´ÈëÉÙÓÚ»òµÈÓÚ 256 ¸ö×Ö½ÚµÄÊı¾İ£¨±ØĞëÔÚÍ¬Ò»Ò³ÄÚ£©
- * @param  pBuffer: Ö¸ÏòÒªĞ´ÈëµÄÊı¾İ»º³åÇøµÄÖ¸   ÓÃ»§×¼±¸ºÃÒªÉÕÂ¼µ½ Flash ÀïµÄÔ­Ê¼ÄÚÈİ
- * @param  WriteAddr: Ğ´ÈëµÄÄ¿±êµØÖ· (24Î»)
- * @param  NumByteToWrite: ±¾´ÎÓÃ»§Ï£ÍûÏò Flash Ğ´ÈëµÄ×Ö½Ú×ÜÊı (±ØĞëĞ¡ÓÚ»òµÈÓÚ 256)
- * @retval ÎŞ
+ * @brief  å‘ W25QXX å†™å…¥å°‘äºæˆ–ç­‰äº 256 ä¸ªå­—èŠ‚çš„æ•°æ®ï¼ˆå¿…é¡»åœ¨åŒä¸€é¡µå†…ï¼‰
+ * @param  pBuffer: æŒ‡å‘è¦å†™å…¥çš„æ•°æ®ç¼“å†²åŒºçš„æŒ‡   ç”¨æˆ·å‡†å¤‡å¥½è¦çƒ§å½•åˆ° Flash é‡Œçš„åŸå§‹å†…å®¹
+ * @param  WriteAddr: å†™å…¥çš„ç›®æ ‡åœ°å€ (24ä½)
+ * @param  NumByteToWrite: æœ¬æ¬¡ç”¨æˆ·å¸Œæœ›å‘ Flash å†™å…¥çš„å­—èŠ‚æ€»æ•° (å¿…é¡»å°äºæˆ–ç­‰äº 256)
+ * @retval æ— 
  */
 
-//ÔÚÖ´ĞĞ W25QXX_PageWrite Ê±£¬ÎÒÃÇĞèÒªĞ´Èë Flash µÄÊı¾İÍùÍù²»ÊÇµ¥µ¥ 1 ¸ö×Ö½Ú£¬¶øÊÇÒ»¸ö°üº¬¼¸Ê®ÉõÖÁ 256 ¸ö×Ö½ÚµÄÊı×é»òÊı¾İ»º³åÇø£¨Buffer£©¡£
-//uint8_t* ´ú±íµÄÊÇÄÚ´æÖĞÕâ´®Á¬ĞøÊı¾İ¿éµÄÊ×µØÖ·¡£º¯ÊıÍ¨¹ıÕâ¸öÊ×µØÖ·£¬ÅäºÏÑ­»·Ö¸ÕëÆ«ÒÆ£¨pBuffer++£©£¬¾ÍÄÜÒÀ´Î·ÃÎÊ²¢·¢ËÍ»º³åÇøÖĞµÄÃ¿Ò»¸ö×Ö½Ú¡£
+//åœ¨æ‰§è¡Œ W25QXX_PageWrite æ—¶ï¼Œæˆ‘ä»¬éœ€è¦å†™å…¥ Flash çš„æ•°æ®å¾€å¾€ä¸æ˜¯å•å• 1 ä¸ªå­—èŠ‚ï¼Œè€Œæ˜¯ä¸€ä¸ªåŒ…å«å‡ åç”šè‡³ 256 ä¸ªå­—èŠ‚çš„æ•°ç»„æˆ–æ•°æ®ç¼“å†²åŒºï¼ˆBufferï¼‰ã€‚
+//uint8_t* ä»£è¡¨çš„æ˜¯å†…å­˜ä¸­è¿™ä¸²è¿ç»­æ•°æ®å—çš„é¦–åœ°å€ã€‚å‡½æ•°é€šè¿‡è¿™ä¸ªé¦–åœ°å€ï¼Œé…åˆå¾ªç¯æŒ‡é’ˆåç§»ï¼ˆpBuffer++ï¼‰ï¼Œå°±èƒ½ä¾æ¬¡è®¿é—®å¹¶å‘é€ç¼“å†²åŒºä¸­çš„æ¯ä¸€ä¸ªå­—èŠ‚ã€‚
 
 void W25QXX_PageWrite(uint8_t* pTxBuffer, uint32_t WriteAddr, uint16_t NumByteToWrite){
-		// 1. ·¢ËÍĞ´Ê¹ÄÜ  
+		// 1. å‘é€å†™ä½¿èƒ½  
 		W25QXX_WriteEnable();
 		if(NumByteToWrite > SPI_FLASH_PerWritePageSize){
 				NumByteToWrite = SPI_FLASH_PerWritePageSize;
 				//printf("\n\r Err: SPI_FLASH_PageWrite too large!");
 		}
-    // 2. À­µÍÆ¬Ñ¡
+    // 2. æ‹‰ä½ç‰‡é€‰
 		W25QXX_CS_LOW();
-		// 3. ·¢ËÍÒ³Ğ´ÈëÖ¸Áî (0x02)
+		// 3. å‘é€é¡µå†™å…¥æŒ‡ä»¤ (0x02)
 		W25QXX_ReadWriteByte(W25X_PageProgram);
-		// 4. ÒÀ´Î·¢ËÍ 24 Î»µØÖ·µÄ¸ß 8 Î»¡¢ÖĞ 8 Î»¡¢µÍ 8 Î»
+		// 4. ä¾æ¬¡å‘é€ 24 ä½åœ°å€çš„é«˜ 8 ä½ã€ä¸­ 8 ä½ã€ä½ 8 ä½
 		/* Send WriteAddr high nibble address byte to write to */
 		W25QXX_ReadWriteByte((WriteAddr & 0xFF0000) >> 16);
 		/* Send WriteAddr medium nibble address byte to write to */
@@ -157,87 +160,87 @@ void W25QXX_PageWrite(uint8_t* pTxBuffer, uint32_t WriteAddr, uint16_t NumByteTo
 		W25QXX_ReadWriteByte(WriteAddr & 0xFF);
 
 		
-		//   memcpy + Flash_CleanTxBuf ·ÅÔÚ·¢ÍêÃüÁîºÍµØÖ·Ö®ºó¡¢Æô¶¯Êı¾İ´«ÊäÖ®Ç° 
-		memcpy(g_flashTxBuf, pTxBuffer, NumByteToWrite);  // 1. Êı¾İ°á½ø¶ÔÆë»º³å
-		Flash_CleanTxBuf(NumByteToWrite);                 // 2. clean cache£¨DMA Ç°±Ø×ö£©
+		//   memcpy + Flash_CleanTxBuf æ”¾åœ¨å‘å®Œå‘½ä»¤å’Œåœ°å€ä¹‹åã€å¯åŠ¨æ•°æ®ä¼ è¾“ä¹‹å‰ 
+		memcpy(g_flashTxBuf, pTxBuffer, NumByteToWrite);  // 1. æ•°æ®æ¬è¿›å¯¹é½ç¼“å†²
+		Flash_CleanTxBuf(NumByteToWrite);                 // 2. clean cacheï¼ˆDMA å‰å¿…åšï¼‰
 		
 		
-//    // 5. Ê¹ÓÃÑ­»·½« pBuffer ÖĞµÄÊı¾İÖğ¸ö×Ö½ÚÍ¨¹ı SPI ·¢ËÍ³öÈ¥
+//    // 5. ä½¿ç”¨å¾ªç¯å°† pBuffer ä¸­çš„æ•°æ®é€ä¸ªå­—èŠ‚é€šè¿‡ SPI å‘é€å‡ºå»
 //		while (NumByteToWrite--){
 //			/* Send the current byte */
 //			W25QXX_ReadWriteByte(*pTxBuffer);
 //			/* Point on the next byte to be written */
 //			pTxBuffer++;
 //		}
-		//	5. SPI+DMA´¥·¢  ½« pBuffer ÖĞµÄÊı¾İÍ¨¹ı SPI+DMA·½Ê½ ·¢ËÍ³öÈ¥
+		//	5. SPI+DMAè§¦å‘  å°† pBuffer ä¸­çš„æ•°æ®é€šè¿‡ SPI+DMAæ–¹å¼ å‘é€å‡ºå»
 
-    // Æô¶¯DMA
+    // å¯åŠ¨DMA
 		if (HAL_SPI_Transmit_DMA(&hspi1, g_flashTxBuf, NumByteToWrite) != HAL_OK) {
-				W25QXX_CS_HIGH();          // Òì³£Ò²ÒªÊÍ·Å CS
-				return;                    // »òÖÃ´íÎó±êÖ¾£¬ÓÉÉÏ²ã¾ö¶¨ÖØÊÔ/±¨´í
+				W25QXX_CS_HIGH();          // å¼‚å¸¸ä¹Ÿè¦é‡Šæ”¾ CS
+				return;                    // æˆ–ç½®é”™è¯¯æ ‡å¿—ï¼Œç”±ä¸Šå±‚å†³å®šé‡è¯•/æŠ¥é”™
 		}
 				
-    // µÈ´ıDMAÍê³É£¨×èÈûµÈ´ıĞÅºÅÁ¿£©
-    /* ·À Task_Test ÓÀ¾Ã×èÈû£ºDMA Íê³É»Øµ÷(HAL_SPI_RxCpltCallback)ÈôÎ´´¥·¢£¬³¬Ê±(1s)¼´
-     * ÊÍ·Å CS ²¢·µ»Ø£¬±ÜÃâ¶öËÀ¿´ÃÅ¹·£¨Õı³£ DMA Íê³É <¼¸ms£©¡£ */
+    // ç­‰å¾…DMAå®Œæˆï¼ˆé˜»å¡ç­‰å¾…ä¿¡å·é‡ï¼‰
+    /* é˜² Task_Test æ°¸ä¹…é˜»å¡ï¼šDMA å®Œæˆå›è°ƒ(HAL_SPI_RxCpltCallback)è‹¥æœªè§¦å‘ï¼Œè¶…æ—¶(1s)å³
+     * é‡Šæ”¾ CS å¹¶è¿”å›ï¼Œé¿å…é¥¿æ­»çœ‹é—¨ç‹—ï¼ˆæ­£å¸¸ DMA å®Œæˆ <å‡ msï¼‰ã€‚ */
     if (osSemaphoreAcquire(g_semFlashDmaDoneHandle, 1000U) != osOK) {
         W25QXX_CS_HIGH();
         return;
     }
 
 		
-    // 6. À­¸ßÆ¬Ñ¡
+    // 6. æ‹‰é«˜ç‰‡é€‰
     /* Deselect the FLASH: Chip Select high */
 		W25QXX_CS_HIGH();
-    // 7. µÈ´ıĞ´Èë½áÊø (µ÷ÓÃ W25QXX_WaitForWriteEnd)
+    // 7. ç­‰å¾…å†™å…¥ç»“æŸ (è°ƒç”¨ W25QXX_WaitForWriteEnd)
 		/* Wait the end of Flash writing */
 		W25QXX_WaitForWriteEnd();	
 }
 
 /**
- * @brief  ´Ó W25QXX Ö¸¶¨µØÖ·¿ªÊ¼¶ÁÈ¡Ö¸¶¨³¤¶ÈµÄÊı¾İ
- * @param  pBuffer: Ö¸Ïò½ÓÊÕÊı¾İµÄ»º³åÇøµÄÖ¸Õë  µÈ´ı°Ñ´Ó Flash ÀïÃæ¶Á³öÀ´µÄÄÚÈİ×°½øÈ¥
- * @param  ReadAddr: ¶ÁÈ¡µÄÆğÊ¼µØÖ· (24Î»)
- * @param  NumByteToRead: Òª¶ÁÈ¡µÄ×Ö½ÚÊı
- * @retval ÎŞ
+ * @brief  ä» W25QXX æŒ‡å®šåœ°å€å¼€å§‹è¯»å–æŒ‡å®šé•¿åº¦çš„æ•°æ®
+ * @param  pBuffer: æŒ‡å‘æ¥æ”¶æ•°æ®çš„ç¼“å†²åŒºçš„æŒ‡é’ˆ  ç­‰å¾…æŠŠä» Flash é‡Œé¢è¯»å‡ºæ¥çš„å†…å®¹è£…è¿›å»
+ * @param  ReadAddr: è¯»å–çš„èµ·å§‹åœ°å€ (24ä½)
+ * @param  NumByteToRead: è¦è¯»å–çš„å­—èŠ‚æ•°
+ * @retval æ— 
  */
 void W25QXX_BufferRead(uint8_t* pRxBuffer, uint32_t ReadAddr, uint16_t NumByteToRead)
-{   // ¶Á²Ù×÷ÊÇ·ÇÆÆ»µĞÔµÄ°²È«ĞĞÎª£º
-	  // ´Ó Flash ÖĞ¶ÁÈ¡Êı¾İ½ö½öÊÇÍ¨¹ıÄÚ²¿¾§Ìå¹Ü¶ÁÈ¡µçÆ½×´Ì¬
-	  // ²»»á¸Ä±äÎïÀí´æ´¢µ¥ÔªµÄµçºÉ£¬¸ü²»»á¶ÔĞ¾Æ¬Ôì³ÉÈÎºÎÓÀ¾ÃĞÔËğÉË¡£
-    // 1. À­µÍÆ¬Ñ¡
+{   // è¯»æ“ä½œæ˜¯éç ´åæ€§çš„å®‰å…¨è¡Œä¸ºï¼š
+	  // ä» Flash ä¸­è¯»å–æ•°æ®ä»…ä»…æ˜¯é€šè¿‡å†…éƒ¨æ™¶ä½“ç®¡è¯»å–ç”µå¹³çŠ¶æ€
+	  // ä¸ä¼šæ”¹å˜ç‰©ç†å­˜å‚¨å•å…ƒçš„ç”µè·ï¼Œæ›´ä¸ä¼šå¯¹èŠ¯ç‰‡é€ æˆä»»ä½•æ°¸ä¹…æ€§æŸä¼¤ã€‚
+    // 1. æ‹‰ä½ç‰‡é€‰
 		W25QXX_CS_LOW();
-    // 2. ·¢ËÍ¶ÁÊı¾İÖ¸Áî (0x03)
+    // 2. å‘é€è¯»æ•°æ®æŒ‡ä»¤ (0x03)
     W25QXX_ReadWriteByte(W25X_ReadData);
-    // 3. ÒÀ´Î·¢ËÍ 24 Î»ÆğÊ¼µØÖ·µÄ¸ß 8 Î»¡¢ÖĞ 8 Î»¡¢µÍ 8 Î»
+    // 3. ä¾æ¬¡å‘é€ 24 ä½èµ·å§‹åœ°å€çš„é«˜ 8 ä½ã€ä¸­ 8 ä½ã€ä½ 8 ä½
 		/* Send WriteAddr high nibble address byte to write to */
 		W25QXX_ReadWriteByte((ReadAddr & 0xFF0000) >> 16);
 		/* Send WriteAddr medium nibble address byte to write to */
 		W25QXX_ReadWriteByte((ReadAddr & 0xFF00) >> 8);
 		/* Send WriteAddr low nibble address byte to write to */
 		W25QXX_ReadWriteByte(ReadAddr & 0xFF);
-    // 4. Êı¾İ¶Î¸ÄÓÃ SPI+DMA ½ÓÊÕ£¨ÃüÁî+µØÖ·ÈÔÂÖÑ¯£¬ÓëÒ³Ğ´Ò»ÖÂ£©£º
-    //    RX µÄ D-Cache ´¦ÀíÓë TX Ïà·´¡ª¡ªÆô¶¯Ç°Ê§Ğ§»º´æ£¬¶ªÆú¾É¸±±¾
+    // 4. æ•°æ®æ®µæ”¹ç”¨ SPI+DMA æ¥æ”¶ï¼ˆå‘½ä»¤+åœ°å€ä»è½®è¯¢ï¼Œä¸é¡µå†™ä¸€è‡´ï¼‰ï¼š
+    //    RX çš„ D-Cache å¤„ç†ä¸ TX ç›¸åâ€”â€”å¯åŠ¨å‰å¤±æ•ˆç¼“å­˜ï¼Œä¸¢å¼ƒæ—§å‰¯æœ¬
     Flash_InvalidateRxBuf(NumByteToRead);
     if (HAL_SPI_Receive_DMA(&hspi1, g_flashRxBuf, NumByteToRead) != HAL_OK) {
-        W25QXX_CS_HIGH();          // Òì³£Ò²ÒªÊÍ·Å CS
-        return;                    // ÓÉÉÏ²ã¾ö¶¨ÖØÊÔ/±¨´í
+        W25QXX_CS_HIGH();          // å¼‚å¸¸ä¹Ÿè¦é‡Šæ”¾ CS
+        return;                    // ç”±ä¸Šå±‚å†³å®šé‡è¯•/æŠ¥é”™
     }
     if (osSemaphoreAcquire(g_semFlashDmaDoneHandle, 1000U) != osOK) {
-        W25QXX_CS_HIGH();   /* DMA ³¬Ê± -> ÊÍ·Å CS ²¢·µ»Ø£¬±ÜÃâ Task_Test ÓÀ¾Ã×èÈû¶öËÀ¿´ÃÅ¹· */
+        W25QXX_CS_HIGH();   /* DMA è¶…æ—¶ -> é‡Šæ”¾ CS å¹¶è¿”å›ï¼Œé¿å… Task_Test æ°¸ä¹…é˜»å¡é¥¿æ­»çœ‹é—¨ç‹— */
         return;
     }
-    memcpy(pRxBuffer, g_flashRxBuf, NumByteToRead);          // ¿½»Øµ÷ÓÃ·½»º³å£¨µ÷ÓÃ·½»º³åÎ´±Ø 32 ¶ÔÆë/ÔÚ AXI SRAM£©
-    // 5. À­¸ßÆ¬Ñ¡
+    memcpy(pRxBuffer, g_flashRxBuf, NumByteToRead);          // æ‹·å›è°ƒç”¨æ–¹ç¼“å†²ï¼ˆè°ƒç”¨æ–¹ç¼“å†²æœªå¿… 32 å¯¹é½/åœ¨ AXI SRAMï¼‰
+    // 5. æ‹‰é«˜ç‰‡é€‰
 		W25QXX_CS_HIGH();
 }
 
 /* =============================================================================
- * ±ÀÀ£ºÚÏ»×Ó£ºÂÖÑ¯Ò³Ğ´ + ±£ÁôÉÈÇøÂäÅÌ
- * ÒÔÏÂĞ´Â·¾¶ÍêÈ«ÂÖÑ¯£¬²»ÒÀÀµ RTOS/DMA£¬¿ÉÔÚ HardFault ÖĞ°²È«µ÷ÓÃ¡£
+ * å´©æºƒé»‘åŒ£å­ï¼šè½®è¯¢é¡µå†™ + ä¿ç•™æ‰‡åŒºè½ç›˜
+ * ä»¥ä¸‹å†™è·¯å¾„å®Œå…¨è½®è¯¢ï¼Œä¸ä¾èµ– RTOS/DMAï¼Œå¯åœ¨ HardFault ä¸­å®‰å…¨è°ƒç”¨ã€‚
  * ============================================================================= */
 
-/* ÂÖÑ¯Ò³Ğ´£¨Óë W25QXX_PageWrite µÈ¼Û£¬µ«Êı¾İ¶ÎÓÃÂÖÑ¯×Ö½ÚÊÕ·¢¶ø·Ç DMA£© */
+/* è½®è¯¢é¡µå†™ï¼ˆä¸ W25QXX_PageWrite ç­‰ä»·ï¼Œä½†æ•°æ®æ®µç”¨è½®è¯¢å­—èŠ‚æ”¶å‘è€Œé DMAï¼‰ */
 static void W25QXX_PageWrite_Polling(const uint8_t *pTxBuffer,
                                      uint32_t WriteAddr, uint16_t NumByteToWrite)
 {
@@ -257,10 +260,10 @@ static void W25QXX_PageWrite_Polling(const uint8_t *pTxBuffer,
     W25QXX_WaitForWriteEnd();
 }
 
-/* °Ñ±ÀÀ£ÈÕÖ¾Ğ´Èë W25Q64 ×îºóÒ»ÉÈÇø£¨4KB£©¡£
- * ·µ»ØĞ´Èë×Ö½ÚÊı£¬<=0 ±íÊ¾Ê§°Ü¡£
- * ²¼¾Ö£ºÉÈÇøÊ× 8 ×Ö½Ú = magic(0x43424144 "CRSH") + len£»Ö®ºóÎªÈÕÖ¾Ìå¡£ */
-#define W25Q_CRASHLOG_ADDR  0x7FF000U   /* W25Q64 = 8MB£¬Ä©ÉÈÇø 4KB ÆğÊ¼ */
+/* æŠŠå´©æºƒæ—¥å¿—å†™å…¥ W25Q64 æœ€åä¸€æ‰‡åŒºï¼ˆ4KBï¼‰ã€‚
+ * è¿”å›å†™å…¥å­—èŠ‚æ•°ï¼Œ<=0 è¡¨ç¤ºå¤±è´¥ã€‚
+ * å¸ƒå±€ï¼šæ‰‡åŒºé¦– 8 å­—èŠ‚ = magic(0x43424144 "CRSH") + lenï¼›ä¹‹åä¸ºæ—¥å¿—ä½“ã€‚ */
+#define W25Q_CRASHLOG_ADDR  0x7FF000U   /* W25Q64 = 8MBï¼Œæœ«æ‰‡åŒº 4KB èµ·å§‹ */
 
 int w25q_crashlog_save(const uint8_t *data, uint32_t len)
 {
@@ -286,11 +289,11 @@ int w25q_crashlog_save(const uint8_t *data, uint32_t len)
 }
 
 /* ------------------------------------------------------------------ */
-/* W25Q64 ÉÏµç×Ô¼ì£¨40MHz SCK ÎÈ¶¨ĞÔÑéÖ¤£©                            */
-/* Á÷³Ì£º¶Á JEDEC ¡ú ²ÁÒ»¸ö²âÊÔÉÈÇø ¡ú Ğ´¹Ì¶¨Í¼°¸ ¡ú ¶Á»Ø±È¶Ô ¡ú »ØÏÔ½á¹û */
-/* µ÷ÓÃ·½£ºStartFlashTask£¨Ò»´ÎĞÔ×Ô¼ì£©£¬²»ÒÀÀµÆÁÏÔÈÎÎñ              */
+/* W25Q64 ä¸Šç”µè‡ªæ£€ï¼ˆ40MHz SCK ç¨³å®šæ€§éªŒè¯ï¼‰                            */
+/* æµç¨‹ï¼šè¯» JEDEC â†’ æ“¦ä¸€ä¸ªæµ‹è¯•æ‰‡åŒº â†’ å†™å›ºå®šå›¾æ¡ˆ â†’ è¯»å›æ¯”å¯¹ â†’ å›æ˜¾ç»“æœ */
+/* è°ƒç”¨æ–¹ï¼šStartFlashTaskï¼ˆä¸€æ¬¡æ€§è‡ªæ£€ï¼‰ï¼Œä¸ä¾èµ–å±æ˜¾ä»»åŠ¡              */
 /* ------------------------------------------------------------------ */
-#define W25Q_TEST_ADDR    0x001000U   /* Ñ¡Ò»¸ö·Ç±£Áô¡¢·ÇºÚÏ»×ÓµÄÉÈÇø */
+#define W25Q_TEST_ADDR    0x001000U   /* é€‰ä¸€ä¸ªéä¿ç•™ã€éé»‘åŒ£å­çš„æ‰‡åŒº */
 #define W25Q_TEST_LEN     256U
 
 int W25QXX_Test(void)
@@ -300,57 +303,143 @@ int W25QXX_Test(void)
     uint32_t jedec;
     int fail = 0;
 
-#ifdef LOG_ENABLED
-    printf("[W25Q TEST] start, SCK=40MHz\r\n");
-#endif
-
-    /* 1) JEDEC ID£ºW25Q64BV = 0xEF4017 */
+    /* 1) JEDEC IDï¼šW25Q64BV = 0xEF4017 ï¼ˆverbose ç»†èŠ‚å½’ DBG_LOG_FLASH é—¨æ§ï¼Œè§æœ«å°¾æˆåŠŸæ±‡æ€»ï¼‰ */
     jedec = W25QXX_ReadJedecID();
-#ifdef LOG_ENABLED
-    printf("[W25Q TEST] JEDEC=0x%06X (%s)\r\n",
-           (unsigned)jedec, (jedec == 0xEF4017UL) ? "OK" : "MISMATCH");
-#endif
     if (jedec != 0xEF4017UL) {
-#ifdef LOG_ENABLED
-        printf("[W25Q TEST] FAIL: JEDEC mismatch\r\n");
-#endif
+        LOG_E("W25Q", "FAIL: JEDEC mismatch");
         return -1;
     }
 
-    /* 2) ¹¹ÔìĞ´Í¼°¸£ºµİÔö×Ö½Ú */
+    /* 2) æ„é€ å†™å›¾æ¡ˆï¼šé€’å¢å­—èŠ‚ */
     for (uint16_t i = 0; i < W25Q_TEST_LEN; i++) {
         tx[i] = (uint8_t)(i & 0xFF);
         rx[i] = 0;
     }
 
-    /* 3) ²ÁÉÈÇø + Ğ´ + ¶Á»Ø */
+    /* 3) æ“¦æ‰‡åŒº + å†™ + è¯»å› */
     W25QXX_SectorErase(W25Q_TEST_ADDR);
     W25QXX_PageWrite(tx, W25Q_TEST_ADDR, W25Q_TEST_LEN);
     W25QXX_BufferRead(rx, W25Q_TEST_ADDR, W25Q_TEST_LEN);
 
-    /* 4) ±È¶Ô */
+    /* 4) æ¯”å¯¹ */
     for (uint16_t i = 0; i < W25Q_TEST_LEN; i++) {
         if (rx[i] != (uint8_t)(i & 0xFF)) {
             fail++;
             if (fail <= 8) {
-#ifdef LOG_ENABLED
-                printf("[W25Q TEST] mismatch @%u: wrote 0x%02X read 0x%02X\r\n",
+                LOG_E("W25Q", "mismatch @%u: wrote 0x%02X read 0x%02X",
                        i, tx[i], rx[i]);
-#endif
             }
         }
     }
 
     if (fail == 0) {
-#ifdef LOG_ENABLED
-        printf("[W25Q TEST] PASS: %u bytes R/W loopback OK @40MHz\r\n",
-               (unsigned)W25Q_TEST_LEN);
+#if DBG_LOG_FLASH == 1
+        LOG_EMIT_DIRECT(LOG_LVL_DEBUG, "D", "W25Q",
+            "self-test PASS: JEDEC=0x%06X OK, %u bytes R/W loopback OK @40MHz",
+            (unsigned)jedec, (unsigned)W25Q_TEST_LEN);
 #endif
         return 0;
     } else {
-#ifdef LOG_ENABLED
-        printf("[W25Q TEST] FAIL: %d byte(s) mismatch\r\n", fail);
-#endif
+        LOG_E("W25Q", "FAIL: %d byte(s) mismatch", fail);
         return -2;
     }
 }
+
+/* ===================== ä¸Šç”µè‡ªæ£€ï¼šå¤–éƒ¨ Flashï¼ˆPOST é˜¶æ®µï¼ŒæŒ‰ APP_ENABLE_FLASH é—¨æ§ï¼‰ ===================== */
+/* é»‘åŒ£å­ä¿ç•™æ‰‡åŒºï¼ˆä¸ä¸Šæ–¹ w25q_crashlog_save æ—¢æœ‰å®šä¹‰ä¸€è‡´ï¼šW25Q64=8MB æœ« 4KB èµ·å§‹ï¼‰ã€‚
+ * æ­¤å¤„ #ifndef ä»…ä½œä¿é™©ï¼šæœ¬æ–‡ä»¶ä¸Šæ–¹ line ~263 å·²å®šä¹‰ W25Q_CRASHLOG_ADDRï¼Œä¸ä¼šé‡å¤å®šä¹‰ã€‚ */
+#ifndef W25Q_CRASHLOG_ADDR
+#define W25Q_CRASHLOG_ADDR  0x7FF000U
+#endif
+
+#if defined(APP_ENABLE_FLASH) && APP_ENABLE_FLASH
+/* hexdump è¡Œå®½ä¸ç¼“å†²å®¹é‡ç»‘å®šï¼šå®¹é‡ç”±è¡Œå®½å…¬å¼æ´¾ç”Ÿï¼Œæ”¹è¡Œå®½ä¸ä¼šè¸©æ ˆã€‚
+ * è¡Œå¸ƒå±€: "%04X: "(6) + NÃ—"%02X "(3N) + " "(1) + NÃ—"%c"(N) + '\0'(1) */
+#define HEXDUMP_BYTES_PER_LINE  16U
+#define HEXDUMP_LINE_LEN        (6U + 3U*HEXDUMP_BYTES_PER_LINE + 1U + HEXDUMP_BYTES_PER_LINE + 1U)  /* =72 */
+#define HEXDUMP_LINE_BUF        (HEXDUMP_LINE_LEN + 24U)   /* =96ï¼Œä¸ä½ å·²éªŒè¯çš„å€¼ä¸€è‡´ */
+
+static void flash_hexdump(const uint8_t *buf, uint32_t len)
+{
+    for (uint32_t i = 0; i < len; i += HEXDUMP_BYTES_PER_LINE) {
+        char line[HEXDUMP_LINE_BUF];
+        _Static_assert(sizeof(line) >= HEXDUMP_LINE_LEN, "hexdump: line[] too small");
+
+        int  n = 0;
+        n += snprintf(line + n, sizeof(line) - (size_t)n, "%04X: ", (unsigned)i);
+        for (uint32_t j = 0; j < HEXDUMP_BYTES_PER_LINE; j++) {
+            if (i + j < len) n += snprintf(line + n, sizeof(line) - (size_t)n, "%02X ", buf[i + j]);
+            else             n += snprintf(line + n, sizeof(line) - (size_t)n, "   ");
+        }
+        n += snprintf(line + n, sizeof(line) - (size_t)n, " ");
+        for (uint32_t j = 0; j < HEXDUMP_BYTES_PER_LINE && (i + j) < len; j++) {
+            uint8_t c = buf[i + j];
+            n += snprintf(line + n, sizeof(line) - (size_t)n, "%c", ((c >= 0x20 && c < 0x7F) ? c : '.'));
+        }
+        LOG_I("POSTEST", "%s", line);
+    }
+}
+
+int Flash_Test(void)
+{
+    #define BLACKBOX_DUMP_BYTES  512U
+    static uint8_t buf[BLACKBOX_DUMP_BYTES];   /* static â†’ BSSï¼Œä¸å ä»»åŠ¡æ ˆ */
+    uint32_t t0 = HAL_GetTick();
+    log_wdt_feed();   /* POST è¿è¡Œåœ¨ Task_Test(HIGH)ï¼Œå–‚ç‹—ç‚¹ä»…åœ¨æœ€ä½ä¼˜å…ˆçº§ Loggerï¼›æ¯æ­¥ä¸»åŠ¨å–‚+è®©å‡ºï¼Œé˜²é¥¿æ­» */
+
+    /* 1. è¯»é»‘åŒ£å­æ‰‡åŒºå¹¶æ‰“å°ï¼ˆçœ‹ä¸Šæ¬¡å´©æºƒæ—¥å¿—ï¼‰ */
+    #if DBG_LOG_FLASH
+        LOG_EMIT_DIRECT(LOG_LVL_DEBUG, "D", "FLASH", "Flash_Test step1 enter: read blackbox @0x%X", (unsigned)W25Q_CRASHLOG_ADDR);
+    #endif
+    LOG_I("POSTEST", "[Flash] step1: read blackbox @0x%X", (unsigned)W25Q_CRASHLOG_ADDR);
+    W25QXX_BufferRead(buf, W25Q_CRASHLOG_ADDR, BLACKBOX_DUMP_BYTES);
+    log_wdt_feed();
+    /* é»‘åŒ£å­æ‰‡åŒºéå…¨ 0xFF(å·²æ“¦é™¤æ€) => ä¸Šæ¬¡è¿è¡Œé—ç•™å´©æºƒæ—¥å¿—ï¼Œæç¤ºæ½œåœ¨ç¨³å®šæ€§é—®é¢˜ï¼ˆWARN è¯­ä¹‰ï¼‰ */
+    int bb_dirty = 0;
+    for (uint32_t k = 0; k < BLACKBOX_DUMP_BYTES; k++) { if (buf[k] != 0xFFU) { bb_dirty = 1; break; } }
+    if (bb_dirty) LOG_W("POSTEST", "Flash blackbox non-empty @0x%X: prior crash log suspected",
+                        (unsigned)W25Q_CRASHLOG_ADDR);
+    osDelay(1);   /* è®©å‡º CPU ç»™ Logger åˆ·ä¸Šé¢çš„æ—¥å¿— + å–‚ç‹—ï¼ˆä»…é˜»å¡æœ¬ HIGH ä»»åŠ¡ 1 tickï¼‰ */
+    #if DBG_LOG_FLASH
+        LOG_EMIT_DIRECT(LOG_LVL_DEBUG, "D", "FLASH", "Flash_Test step1 done: elapsed=%lu ms first_byte=0x%02X",
+              (unsigned long)(HAL_GetTick() - t0), (unsigned)buf[0]);
+    #endif
+    LOG_I("POSTEST", "Flash blackbox first %u bytes:", BLACKBOX_DUMP_BYTES);
+    flash_hexdump(buf, BLACKBOX_DUMP_BYTES);
+
+    /* 2. æ¸…ç©ºï¼ˆç»™æœ¬æ¬¡è¿è¡Œç•™å¹²å‡€é»‘åŒ£å­ï¼‰ */
+    uint32_t t2 = HAL_GetTick();
+    #if DBG_LOG_FLASH
+        LOG_EMIT_DIRECT(LOG_LVL_DEBUG, "D", "FLASH", "Flash_Test step2 enter: erase blackbox @0x%X", (unsigned)W25Q_CRASHLOG_ADDR);
+    #endif
+    LOG_I("POSTEST", "[Flash] step2: erase blackbox @0x%X", (unsigned)W25Q_CRASHLOG_ADDR);
+    W25QXX_SectorErase(W25Q_CRASHLOG_ADDR);   /* å†…éƒ¨ WaitForWriteEnd å·²åŠ  1.5s è¶…æ—¶ï¼Œä¸ä¼šæ­»ç­‰ */
+    log_wdt_feed();
+    osDelay(1);
+    #if DBG_LOG_FLASH
+        LOG_EMIT_DIRECT(LOG_LVL_DEBUG, "D", "FLASH", "Flash_Test step2 done: elapsed=%lu ms", (unsigned long)(HAL_GetTick() - t2));
+    #endif
+    LOG_I("POSTEST", "Flash blackbox erased @0x%X", (unsigned)W25Q_CRASHLOG_ADDR);
+
+    /* 3. èŠ¯ç‰‡å®Œæ•´æ€§è‡ªæ£€ï¼ˆJEDEC + æ“¦/å†™/è¯»å›ç¯ï¼‰ï¼›JEDEC ç”± W25QXX_Test å†…éƒ¨ printf ç›´å‘ USART1 */
+    uint32_t t3 = HAL_GetTick();
+    #if DBG_LOG_FLASH
+        LOG_EMIT_DIRECT(LOG_LVL_DEBUG, "D", "FLASH", "Flash_Test step3 enter: W25QXX_Test");
+    #endif
+    LOG_I("POSTEST", "[Flash] step3: W25QXX_Test (JEDEC + R/W loopback)");
+    int rc = W25QXX_Test();
+    log_wdt_feed();
+    #if DBG_LOG_FLASH
+        LOG_EMIT_DIRECT(LOG_LVL_DEBUG, "D", "FLASH", "Flash_Test step3 done: rc=%d elapsed=%lu ms",
+              rc, (unsigned long)(HAL_GetTick() - t3));
+    #endif
+    if (rc != 0) {
+        LOG_E("POSTEST", "Flash chip self-test FAIL rc=%d "
+              "(æŸ¥ W25Q æ¥çº¿: CS/CLK/MOSI/DO(MISO)ï¼›DO æ‚¬ç©º->çŠ¶æ€å¯„å­˜å™¨è¯»0xFF ä¼šè¯¯åˆ¤ busy è‡´åŸä»£ç æ­»ç­‰)",
+              rc);
+    } else {
+        LOG_I("POSTEST", "Flash chip self-test OK");
+    }
+    return rc;
+}
+#endif /* APP_ENABLE_FLASH */
