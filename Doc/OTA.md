@@ -186,67 +186,147 @@
 /* ota_param.h —— 参数区结构，存于 0x08020000 (S1) */
 #define OTA_PARAM_ADDR   0x08020000U
 #define OTA_MAGIC        0xABADC0DEU
-#define APP1_ADDR        0x08040000U   /* VECT_TAB_OFFSET = 0x40000 */
-#define APP2_ADDR        0x080C0000U   /* VECT_TAB_OFFSET = 0xC0000 */
-#define APP_SLOT_SIZE    (896*1024U)
+#define APP1_ADDR        0x08040000U   /* VECT_TAB_OFFSET = 0x40000  */
+#define APP2_ADDR        0x08100000U   /* VECT_TAB_OFFSET = 0x100000 */
+#define APP_SLOT_SIZE    (768*1024U)
+#define SLOT_ADDR(s)     ((s) ? APP2_ADDR : APP1_ADDR)
+#define OTA_BOOT_MAX     3U            /* PENDING 连续启动失败上限，达到即回滚 */
+
+/* 由 Keil target 传入：-D APP_SLOT_BASE=0x08040000 或 0x08100000 */
+#if !defined(APP_SLOT_BASE)
+  #error "APP_SLOT_BASE must be defined per target (APP_SLOT1 / APP_SLOT2)"
+#endif
+
+typedef enum { OTA_OK = 0, OTA_UPDATE = 1, OTA_PENDING = 2 } ota_flag_t;
 
 typedef struct {
     uint32_t magic;         /* OTA_MAGIC，掉电后仍能识别 */
-    uint32_t active_slot;   /* 0=APP1, 1=APP2 */
-    uint32_t ota_flag;      /* 0=OK, 1=UPDATE, 2=PENDING */
+    uint32_t active_slot;   /* 0=APP1, 1=APP2（当前运行的槽） */
+    uint32_t ota_flag;      /* ota_flag_t */
     uint32_t new_version;   /* 待激活/已激活版本号 */
-    uint32_t crc32;         /* 整包 CRC，校验时用 */
+    uint32_t crc32;         /* 整包 CRC；BootLoader 会自己重算一遍 */
+    uint32_t img_size;      /* 镜像字节数 = CRC 覆盖长度 */
+    uint32_t pending_slot;  /* PENDING 阶段待确认的槽 */
+    uint32_t boot_attempt;  /* PENDING 下连续启动次数，>=OTA_BOOT_MAX 回滚 */
     uint32_t heartbeats_ok; /* 新固件心跳计数 */
-} ota_param_t;
+    uint32_t last_error;    /* 回滚/失败原因，便于云端归因 */
+} ota_param_t;              /* 40 B，塞在 128KB 扇区里绰绰有余 */
 ```
+
+> ⚠️ **S1 写入成本控制**：H7 Flash 擦写寿命约 **10 kcycles**，且改一个字段要**整扇区擦除再写**。所以只在**状态迁移**时写（`UPDATE→PENDING`、`PENDING→OK`、回滚），常态 `OK` 分支**一次都不写**——别每次启动都写一遍 `boot_attempt`。
 
 ### 5.2 BootLoader 主逻辑（S0 独立工程）
 
 ```c
-/* bootloader_main.c —— 独立工程，链接到 0x08000000 */
+/* bootloader_main.c —— 独立工程，链接到 0x08000000，不含网络代码 */
 void bootloader_run(void) {
     ota_param_t p;
+
+    IWDG_Start();                             /* 4.1s；此后一切耗时循环都要喂（§10） */
     flash_read_param(&p);                     /* 从 S1 读 */
 
     if (p.magic != OTA_MAGIC) {               /* 首次上电/参数损坏 */
-        p.active_slot = 0; p.ota_flag = 0;
+        p.active_slot = 0; p.ota_flag = OTA_OK; p.boot_attempt = 0;
         flash_write_param(&p);
     }
 
-    if (p.ota_flag == OTA_FLAG_UPDATE) {      /* 需要升级 */
-        if (esp_download_and_verify() == OK) {/* MQTT收URL→HTTP拉包→CRC32 */
-            flash_erase_slot(!p.active_slot); /* 擦备用槽 */
-            flash_write_slot(!p.active_slot); /* W25Q → 内部Flash */
-            p.ota_flag = OTA_FLAG_PENDING;
-            p.active_slot = !p.active_slot;   /* 切到新槽 */
-            flash_write_param(&p);
-            NVIC_SystemReset();               /* 软件复位 */
+    if (p.ota_flag == OTA_PENDING) {          /* 有待确认的新固件 */
+        uint32_t slot = p.pending_slot;
+        SCB_InvalidateDCache_by_Addr((void*)SLOT_ADDR(slot), p.img_size);
+        if (img_self_check(SLOT_ADDR(slot)) &&                       /* 见易错 11 */
+            crc32_flash(SLOT_ADDR(slot), p.img_size) == p.crc32) {   /* 自己重算，不信 APP */
+            p.active_slot  = slot;
+            p.boot_attempt = 0;
+            /* 故意保留 PENDING：等 APP 心跳成功再固化 OK */
+        } else if (++p.boot_attempt >= OTA_BOOT_MAX) {
+            p.active_slot = !p.pending_slot;  /* 回滚到旧槽 */
+            p.ota_flag    = OTA_OK;
+            p.last_error  = OTA_ERR_ROLLBACK;
         }
+        flash_write_param(&p);                /* 状态迁移才写；前后都要喂狗 */
     }
+    /* OTA_UPDATE：不做任何下载，照常跳 active APP，让 APP 去拉包 */
 
-    uint32_t app_addr = (p.active_slot == 0) ? APP1_ADDR : APP2_ADDR;
+    uint32_t app_addr = SLOT_ADDR(p.active_slot);
     if (app_is_valid(app_addr)) {             /* 检查栈顶指针合法性 */
+        IWDG_Refresh();                       /* 跳之前最后喂一次，把整窗口交给 APP */
         jump_to_app(app_addr);                /* 见 5.5 */
     }
-    while (1);                                /* 都不合法：停 BootLoader */
+    for (;;) { IWDG_Refresh(); }              /* 都不合法：停 BootLoader 等人工/狗 */
 }
 ```
 
-### 5.3 ESP8266 下载 + 校验（APP 工程内，USART2 驱动）
+> **BootLoader 里没有 `esp_download_*`（旧版 §5.2 的写法已废弃）**。它只依赖：内部 Flash 驱动 + CRC32 + `jump_to_app` + 一个参数区读写。网络全在 APP，可复用 logger / VOFA / 串口控制台来调试——这点对"第一次把 OTA 跑通"极其关键。
+
+### 5.3 ESP-01S 下载 + 边下边烧（APP 工程内，USART2 驱动）
 
 ```c
-/* esp_ota.c —— 在 APP 里跑，下载阶段由 APP 主导而非 BootLoader */
-int esp_download_and_verify(void) {
-    /* 1) ESP-01S(USART2) 已通过 AT 连 Wi-Fi + 连阿里云 MQTT（你做过，略） */
-    /* 2) 订阅阿里云 OTA 下发 topic（见 §6 易错 7）*/
-    /* 3) 收到 { "version":x, "size":N, "url":"https://.../x.bin", "sign":"CRC32" } */
-    /* 4) AT+CIPSTART 建 TCP/SSL 连 URL 主机，HTTP GET 拉包（走 USART2 收发 AT）*/
-    /* 5) 分包写入 W25Q（每包 512B，记 offset 实现断点续传）*/
-    /* 6) 整包算 CRC32，与云端 sign 比对 */
-    if (crc32_of_w25q != expected) return ERR_CRC;
+/* esp_ota.c —— 全部在 APP 里跑：下载 + 烧写。BootLoader 不参与网络。 */
+int esp_ota_download_and_burn(void) {
+    uint32_t slot = !ota_param.active_slot;              /* 备用槽 */
+    uint32_t dst  = SLOT_ADDR(slot);
+    uint8_t  buf[1024] __attribute__((aligned(32)));     /* flashword=32B，缓冲取 32 倍数 */
+
+    /* 1) ESP-01S(USART2) 已连 Wi-Fi + 阿里云 MQTT（esp01s.c 现成） */
+    /* 2) 订阅 /sys/{pk}/{dn}/thing/ota/firmware/get，收 {version,size,url,sign} */
+    /* 3) 选构件：APP1/APP2 是两份不同链接基址的构建，必须取对应那份（易错 10） */
+    const char *url = ota_pick_url_for_slot(slot);
+    if (!ota_url_matches_slot(url, slot)) return ERR_SLOT_MISMATCH;
+
+    /* 4) 只擦"装得下镜像"的那些扇区 —— 92KB 只要 1 个，别傻擦满 768KB/6 个 */
+    uint32_t nsec = (size + 128*1024U - 1) / (128*1024U);
+    FLASH_EraseInitTypeDef e = { .TypeErase = FLASH_TYPEERASE_SECTORS,
+                                 .Banks     = slot_bank_of(dst),      /* 按地址选 BANK_1/2 */
+                                 .Sector    = sector_of(dst),
+                                 .NbSectors = nsec,
+                                 .VoltageRange = FLASH_VOLTAGE_RANGE_4 }; /* x64：最快 */
+    for (uint32_t s = 0; s < nsec; s++) {
+        HAL_FLASH_Unlock();
+        e.Sector = sector_of(dst) + s;
+        HAL_FLASHEx_Erase(&e, &err);
+        HAL_FLASH_Lock();
+        log_wdt_feed();                    /* ⚠ 每扇区喂一次：单扇区最坏 2s，见易错 12 */
+    }
+
+    /* 5) 边收边烧：AT+CIPSTART → HTTP GET → 每满 1KB 写一次 */
+    uint32_t off = 0, crc = 0xFFFFFFFFU;
+    while (off < size) {
+        int n = esp_http_read(buf, sizeof(buf));         /* 中断接收，不关中断 */
+        if (n <= 0) return ERR_NET;
+        crc = crc32_accum(crc, buf, n);
+        n = pad_to_32b(buf, n);                          /* 不足 flashword 补 0xFF */
+        HAL_FLASH_Unlock();
+        for (int i = 0; i < n; i += 32) {
+            HAL_FLASH_Program(FLASH_TYPEPROGRAM_FLASHWORD, dst + off + i,
+                              (uint32_t)(buf + i));
+            if ((i & 0xFFF) == 0) log_wdt_feed();        /* 每 4KB 喂一次 */
+        }
+        HAL_FLASH_Lock();
+        off += n;
+        mqtt_report_progress(off, size);                 /* 进度走 MQTT，不挤 VOFA */
+    }
+
+    /* 6) 回读校验：写完必须先失效 D-Cache，否则读的是缓存旧行（易错 13） */
+    SCB_InvalidateDCache_by_Addr((void*)dst, size);
+    if (crc32_flash(dst, size) != expected_crc) return ERR_CRC;
+
+    /* 7) 交棒：置 PENDING + pending_slot，复位让 BootLoader 自己再验一遍 */
+    ota_param.pending_slot = slot;
+    ota_param.new_version  = version;
+    ota_param.crc32        = expected_crc;
+    ota_param.img_size     = size;
+    ota_param.boot_attempt = 0;
+    ota_param.ota_flag     = OTA_PENDING;
+    flash_write_param(&ota_param);
+    NVIC_SystemReset();
     return OK;
 }
 ```
+
+要点：
+- **擦写期间不要关中断**。关了会丢 USART2 的字节；开着反而安全——目标槽在另一个 Bank，RWW 保证取指/取中断向量不 stall，这正是 §3 坚持 Bank 对齐的回报。
+- **只擦需要的扇区**，而不是整个 768KB 槽。6 个扇区 × 最坏 2s = 12s，1 个扇区 = 2s，差一个数量级。
+- **`VoltageRange` 用 `FLASH_VOLTAGE_RANGE_4`（x64 并行）**，3.3V 供电下允许；单扇区擦除 典型 1s / **最坏 2s**（x8 时最坏 4s，逼近 4.1s 狗口，绝不能用）。
 
 ### 5.4 CRC32（整包完整性，必须有）
 
@@ -267,18 +347,25 @@ uint32_t crc32_calc(const uint8_t *buf, uint32_t len) {
 ```c
 void jump_to_app(uint32_t app_addr) {
     __disable_irq();
+    SysTick->CTRL = 0;                        /* 停 SysTick，防残留节拍打断新 APP 启动 */
     HAL_RCC_DeInit();
     HAL_DeInit();
+    SCB_DisableICache();
+    SCB_InvalidateDCache();                   /* 新固件是刚烧进去的，缓存里可能是旧行 */
+    SCB_DisableDCache();
+    __DSB(); __ISB();
     SCB->VTOR = app_addr;                     /* 漏这步必 HardFault */
-    uint32_t msp = *(volatile uint32_t*)app_addr;
-    __set_MSP(msp);
+    __DSB(); __ISB();
+    uint32_t msp   = *(volatile uint32_t*)app_addr;
     uint32_t reset = *(volatile uint32_t*)(app_addr + 4);
+    __set_MSP(msp);
     void (*app_reset)(void) = (void(*)(void))reset;
     app_reset();
 }
 ```
 
 > **APP 工程里也必须设 `VECT_TAB_OFFSET`**（`system_stm32h7xx.c` 的宏，或 `HAL_` 之后 `SCB->VTOR = FLASH_BASE + offset`），否则 APP 自己跑中断也会 HardFault。
+> ⚠️ **每个 target 的 offset 必须跟自己的链接基址配套**：`APP_SLOT1` → `0x40000`，`APP_SLOT2` → `0x100000`。用 `-D APP_SLOT_BASE=...` 统一驱动 `.sct` 与该宏，避免两处手填不同步（这正是 §5.1 那个 `#error` 存在的意义）。
 
 ### 5.6 心跳回滚（新 APP 启动后）
 
@@ -328,7 +415,8 @@ void app_heartbeat_task(void) {
 - 云端与 STM32 端 CRC32（多项式 `0xEDB88320`、初始 `0xFFFFFFFF`、结果取反）必须完全一致，否则永远校验失败。先用已知文件在 PC 和 STM32 对拍。
 
 ### ⚠️ 易错 5：下载中途掉电 = 变砖（必须双备份）
-- 写 APP 槽时掉电，该槽损坏。靠「先写备用槽 + 校验通过才切激活 + 旧槽保留」保证能回旧版本。W25Q 缓冲 + 断点续传：记录已写 offset，重连后从 offset 继续。
+- 写 APP 槽时掉电，该槽损坏。靠「先写备用槽 + CRC 校验通过才切激活 + 旧槽保留」保证能回旧版本。
+- 本方案**不做断点续传**（92KB 全包重下约 7s，比维护 offset 状态简单得多）：掉电/断网后 `FLAG` 仍是 `UPDATE`，重启后 APP **重新擦除、整包重下**。⚠️ 千万别"只重下不重擦"——Flash 只能 1→0，写过的位置未擦除不能改写。
 
 ### ⚠️ 易错 6：回滚条件设计反了
 - 错误：新 APP 启动失败但 `active_slot` 已切到新槽 → 重启又跳坏的。正确：PENDING 阶段**先不固化**，心跳成功（≥3分钟）才 `FLAG=OK`；失败则把 `active_slot` 切回旧值再复位。
