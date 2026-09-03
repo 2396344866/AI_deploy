@@ -74,6 +74,5 @@ AI_deploy/
 - **CubeMX 边界**：`Core/` 生成文件严禁手改；要配置去 `.ioc`，等"已完成"再对接。
 - **Keil 边界**：不手改 `.uvprojx`（IncludePath/FilePath）；新增源文件由用户加源组。
 - **故障归档**：出 bug 先查 `Components/Debug/Error/<TASK>_error.md` + `post_error.md`（运行期）、`compile_link_error.md`（编译链接）、`uvprojx_error.md`（uvprojx）、`crash_error.md`（死机取证）。
-- **私密凭据**：`secrets.h` 已被 `.gitignore` 排除，真实 MQTT 密码派生值走此文件，勿提交。
 
 > 更细的组件规范与接口说明见 `Doc/Readme.md`。
