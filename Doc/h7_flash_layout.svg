@@ -1,7 +1,7 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="760" height="760" viewBox="0 0 760 760" font-family="Consolas, Menlo, monospace">
   <rect width="760" height="760" fill="#ffffff"/>
   <text x="380" y="28" font-size="18" font-weight="bold" fill="#1a1a1a" text-anchor="middle">STM32H743VIT6 Flash 分区 + 内存分布（OTA 双 APP）</text>
-  <text x="380" y="48" font-size="12" fill="#666" text-anchor="middle">内部 Flash 2MB / 128KB 扇区×16（Bank1 S0-S7 @0x0800_0000，Bank2 S0-S7 @0x0808_0000）</text>
+  <text x="380" y="48" font-size="12" fill="#666" text-anchor="middle">内部 Flash 2MB / 128KB 扇区×16（Bank1 S0-S7 @0x0800_0000，Bank2 S8-S15 @0x0810_0000）</text>
 
   <!-- 内部 Flash 总框 -->
   <rect x="40" y="70" width="420" height="600" fill="#f4f7fb" stroke="#9bb3d6" stroke-width="1.5"/>
@@ -20,7 +20,7 @@
 
   <!-- APP1 槽 -->
   <rect x="60" y="212" width="380" height="120" fill="#5a9e6f" stroke="#234" stroke-width="1"/>
-  <text x="250" y="232" font-size="12" fill="#fff" text-anchor="middle" font-weight="bold">S2-S8  APP1 槽（896KB） 0x0804_0000</text>
+  <text x="250" y="232" font-size="12" fill="#fff" text-anchor="middle" font-weight="bold">S2-S7  APP1 槽（768KB） 0x0804_0000</text>
   <text x="76" y="252" font-size="11" fill="#eaffea">├ .text    代码（FreeRTOS/驱动/推理逻辑）</text>
   <text x="76" y="269" font-size="11" fill="#eaffea">├ .rodata  只读常量 ⮕ 含两类模型权重：</text>
   <text x="92" y="285" font-size="10.5" fill="#d6ffd6">• Fault_Diagnosis model_weights.h (INT8)</text>
@@ -29,9 +29,9 @@
 
   <!-- APP2 槽 -->
   <rect x="60" y="336" width="380" height="120" fill="#c8923a" stroke="#234" stroke-width="1"/>
-  <text x="250" y="356" font-size="12" fill="#fff" text-anchor="middle" font-weight="bold">S9-S15 APP2 槽（896KB） 0x080C_0000</text>
+  <text x="250" y="356" font-size="12" fill="#fff" text-anchor="middle" font-weight="bold">S8-S13 APP2 槽（768KB） 0x0810_0000</text>
   <text x="76" y="376" font-size="11" fill="#fff4e0">├ 升级备用槽 / 下载目标（平时不跑）</text>
-  <text x="76" y="393" font-size="11" fill="#fff4e0">├ 结构与 APP1 完全相同（同 .sct，仅 ROM_START 不同）</text>
+  <text x="76" y="393" font-size="11" fill="#fff4e0">├ 双 Keil target（APP_SLOT1/APP_SLOT2）；-D APP_SLOT_BASE= 驱动 .sct 与 VTOR</text>
   <text x="76" y="410" font-size="11" fill="#fff4e0">└ 新固件 CRC32 通过后才切 active_slot 到此</text>
   <text x="76" y="427" font-size="10.5" fill="#ffe0b0">两槽交替：本次备用槽 = 下次可回滚旧固件</text>
 
@@ -40,7 +40,7 @@
   <text x="70" y="478" font-size="10.5" fill="#234">说明：</text>
   <text x="70" y="493" font-size="10.5" fill="#234">• 编译期权重随 APP 整包升级，自动覆盖，不单独开通道</text>
   <text x="70" y="508" font-size="10.5" fill="#234">• RW/ZI 变量运行期全在 RAM，Flash 仅存 .data 初始映像</text>
-  <text x="70" y="523" font-size="10.5" fill="#234">• 升级流程：ESP-01S 收包→W25Q64 缓冲→BootLoader 校验</text>
+  <text x="70" y="523" font-size="10.5" fill="#234">• 升级流程：APP 经 ESP-01S 收包→内部 Flash 双bank 边下边烧→BootLoader 仅校验/切槽</text>
   <text x="70" y="538" font-size="10.5" fill="#234">  CRC32 通过才切 active_slot；失败/卡死由 IWDG1(4.1s) 硬复位回滚</text>
 
   <!-- RAM 框 -->
@@ -66,10 +66,10 @@
   <text x="595" y="312" font-size="10.5" fill="#7a2e2e" text-anchor="middle">← RAM 内容由新 APP 重启后</text>
   <text x="595" y="328" font-size="10.5" fill="#7a2e2e" text-anchor="middle">  自行 __main 重建，OTA 不搬 RAM</text>
 
-  <!-- W25Q64 外部 -->
-  <rect x="470" y="470" width="250" height="200" fill="#eef7ee" stroke="#7ab87a" stroke-width="1.5"/>
+  <!-- W25Q64 外部（OTA 已改内部 Flash 双 bank 烧写，不再作缓冲） -->
+  <rect x="470" y="470" width="250" height="180" fill="#eef7ee" stroke="#7ab87a" stroke-width="1.5"/>
   <text x="595" y="490" font-size="13" font-weight="bold" fill="#2e6b2e" text-anchor="middle">外部 W25Q64（SPI1, PA4 CS）</text>
-  <text x="595" y="508" font-size="11" fill="#2e6b2e" text-anchor="middle">8MB · 运行期参数 · OTA 碰不到</text>
+  <text x="595" y="508" font-size="11" fill="#2e6b2e" text-anchor="middle">8MB · 运行期参数 · OTA 不碰（改内部Flash双bank烧写）</text>
 
   <rect x="488" y="518" width="214" height="34" fill="#9bcf9b" stroke="#2e6b2e"/>
   <text x="595" y="538" font-size="10.5" fill="#063" text-anchor="middle">磁标定硬铁/软铁矩阵</text>
@@ -79,18 +79,13 @@
   <text x="595" y="578" font-size="10.5" fill="#063" text-anchor="middle">崩溃黑匣子 w25q_crashlog</text>
   <text x="595" y="587" font-size="9.5" fill="#063" text-anchor="middle">（HardFault 时轮询写入）</text>
 
-  <rect x="488" y="598" width="214" height="40" fill="#bfe3bf" stroke="#2e6b2e"/>
-  <text x="595" y="616" font-size="10.5" fill="#063" text-anchor="middle">OTA 下载缓冲（断点续传）</text>
-  <text x="595" y="630" font-size="9.5" fill="#063" text-anchor="middle">收包暂存 → CRC32 → 再写内部Flash</text>
+  <text x="595" y="616" font-size="10.5" fill="#2e6b2e" text-anchor="middle">✓ 与内部 Flash 代码区解耦</text>
+  <text x="595" y="632" font-size="10.5" fill="#2e6b2e" text-anchor="middle">  OTA 升级 APP 不影响这些参数</text>
 
-  <!-- IWDG 可靠性标注 -->
-  <rect x="488" y="646" width="214" height="44" fill="#f6dede" stroke="#b23b3b" stroke-width="1"/>
-  <text x="595" y="664" font-size="10.5" fill="#7a1f1f" text-anchor="middle" font-weight="bold">IWDG1 失效保护（LSI 32k）</text>
-  <text x="595" y="679" font-size="9.5" fill="#7a1f1f" text-anchor="middle">超时 4.1s 硬复位；升级/落盘卡死均兜底回滚</text>
-  <text x="595" y="691" font-size="9" fill="#7a1f1f" text-anchor="middle">常态喂狗在 LoggerTask（每2ms）</text>
-
-  <text x="595" y="654" font-size="10.5" fill="#2e6b2e" text-anchor="middle">✓ 与内部 Flash 代码区解耦</text>
-  <text x="595" y="670" font-size="10.5" fill="#2e6b2e" text-anchor="middle">  OTA 升级 APP 不影响这些参数</text>
+  <!-- IWDG 可靠性标注（独立机制，覆盖升级/烧写卡死兜底） -->
+  <rect x="470" y="660" width="250" height="48" fill="#f6dede" stroke="#b23b3b" stroke-width="1"/>
+  <text x="595" y="680" font-size="11" fill="#7a1f1f" text-anchor="middle" font-weight="bold">IWDG1 失效保护（LSI 32k）</text>
+  <text x="595" y="698" font-size="9.5" fill="#7a1f1f" text-anchor="middle">超时 4.1s 硬复位；OTA 烧写卡死兜底回滚</text>
 
   <!-- 箭头：APP槽 <-> RAM -->
   <line x1="440" y1="272" x2="488" y2="136" stroke="#999" stroke-width="1" stroke-dasharray="4 3"/>

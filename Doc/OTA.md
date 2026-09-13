@@ -164,11 +164,17 @@
    - HTTP 分包拉取 → **边收边烧进备用槽**（不落 W25Q）。
 4. 收完 → **镜像自检**（MSP / 复位向量 / 目标槽范围，见易错 11）→ 整包 CRC32 与云端 `sign` 比对。
 5. 通过 → 写 S1：`pending_slot = !active_slot`、新 version、`crc32`、`img_size`、`FLAG = PENDING`、`boot_attempt = 0` → `NVIC_SystemReset()`。
-6. 重启 BootLoader 见 `PENDING` → **自己重算一遍备用槽 CRC（不信 APP 写的 flag）**：
-   - 通过 → `active_slot = pending_slot`、`boot_attempt = 0`，**仍保留 PENDING**（交给心跳固化）→ 跳新 APP；
-   - 失败 → `boot_attempt++`；`>= OTA_BOOT_MAX(3)` 则回滚（见下）。
+6. 重启 BootLoader 见 `PENDING` → **自己重算一遍备用槽 CRC（不信 APP 写的 flag）**，分三种情况：
+
+   | 情况 | 判定 | 动作 |
+   |---|---|---|
+   | 校验通过 且 `active_slot != pending_slot` | **首次切换** | `active_slot = pending_slot`、`boot_attempt = 0`，**保留 PENDING**（等心跳固化）→ 跳新 APP |
+   | 校验通过 但 `active_slot == pending_slot` | **上次已切槽却没固化成功**（新 APP 起不来/心跳失败） | `boot_attempt++`；`>= 3` → `active_slot` 切回旧值 + `FLAG = OK` + 上报回滚 → 复位；否则再给一次机会 |
+   | 校验失败 | 镜像烧坏了 | `boot_attempt++`；`< 3` → `FLAG = UPDATE`（`active_slot` 不变）跳**旧** APP 重新下载；`>= 3` → 放弃，`FLAG = OK` + `last_error = ERR_CRC`，留在旧槽 |
+
+   > ⚠️ 第二种情况的分支**不能省**——若只在"校验失败"时计数，新固件一挂起就会被反复重新切槽、`boot_attempt` 永不清零，**回滚永远不会触发**。
 7. 新 APP 启动 → **3 分钟内 MQTT 心跳连续成功** → APP 自己写 `FLAG = OK` 固化，升级完成。
-   - 心跳失败 / 根本起不来 → 每次进 `PENDING` 都 `boot_attempt++`，`>= 3` 则 `active_slot` 切回旧值 + `FLAG = OK` + 上报回滚事件 → 复位。
+   - ⚠️ 心跳固化**只允许"当前运行槽 == `pending_slot`"的 APP 执行**（拿编译期 `APP_SLOT_BASE` 与参数区 `active_slot` 一比即知）。否则旧固件会替一个校验失败的新镜像"背书"，把失败悄悄吞掉。
 
 > **两步确认缺一不可**：第 6 步的 CRC 重算兜住"烧坏了 / 烧一半断电"；第 7 步的心跳兜住"烧对了但业务层跑飞（联网失败、推理崩溃）"。少任何一步都会留下变砖窗口。
 >
@@ -232,18 +238,27 @@ void bootloader_run(void) {
 
     if (p.ota_flag == OTA_PENDING) {          /* 有待确认的新固件 */
         uint32_t slot = p.pending_slot;
-        SCB_InvalidateDCache_by_Addr((void*)SLOT_ADDR(slot), p.img_size);
-        if (img_self_check(SLOT_ADDR(slot)) &&                       /* 见易错 11 */
-            crc32_flash(SLOT_ADDR(slot), p.img_size) == p.crc32) {   /* 自己重算，不信 APP */
-            p.active_slot  = slot;
-            p.boot_attempt = 0;
-            /* 故意保留 PENDING：等 APP 心跳成功再固化 OK */
+        SCB_InvalidateDCache_by_Addr((void*)SLOT_ADDR(slot), p.img_size);  /* 易错 13 */
+        if (img_self_check(SLOT_ADDR(slot)) &&                     /* 易错 11 */
+            crc32_flash(SLOT_ADDR(slot), p.img_size) == p.crc32) { /* 自己重算，不信 APP */
+            if (p.active_slot == slot) {
+                /* 上次已切槽却还没固化 => 新固件起不来/心跳失败，计数并可能回滚 */
+                if (++p.boot_attempt >= OTA_BOOT_MAX) {
+                    p.active_slot = !slot;
+                    p.ota_flag    = OTA_OK;
+                    p.last_error  = OTA_ERR_ROLLBACK;
+                }
+            } else {
+                p.active_slot  = slot;        /* 首次切换 */
+                p.boot_attempt = 0;           /* 保留 PENDING，等 APP 心跳固化 */
+            }
         } else if (++p.boot_attempt >= OTA_BOOT_MAX) {
-            p.active_slot = !p.pending_slot;  /* 回滚到旧槽 */
-            p.ota_flag    = OTA_OK;
-            p.last_error  = OTA_ERR_ROLLBACK;
+            p.ota_flag   = OTA_OK;            /* 镜像烧坏：放弃，留在旧槽 */
+            p.last_error = OTA_ERR_CRC;
+        } else {
+            p.ota_flag = OTA_UPDATE;          /* 回退到重新下载，仍跑旧 APP */
         }
-        flash_write_param(&p);                /* 状态迁移才写；前后都要喂狗 */
+        flash_write_param(&p);                /* 仅状态迁移时写；前后都喂狗 */
     }
     /* OTA_UPDATE：不做任何下载，照常跳 active APP，让 APP 去拉包 */
 
@@ -257,6 +272,8 @@ void bootloader_run(void) {
 ```
 
 > **BootLoader 里没有 `esp_download_*`（旧版 §5.2 的写法已废弃）**。它只依赖：内部 Flash 驱动 + CRC32 + `jump_to_app` + 一个参数区读写。网络全在 APP，可复用 logger / VOFA / 串口控制台来调试——这点对"第一次把 OTA 跑通"极其关键。
+>
+> 注：`IWDG_Start()` / `IWDG_Refresh()` 是本项目 APP 侧封装的名字（`Core/Src/iwdg.c`）；BootLoader 是独立工程，用同名的裸封装或直接用 `HAL_IWDG_Init/Refresh` 均可，语义一致即可（见 §10）。
 
 ### 5.3 ESP-01S 下载 + 边下边烧（APP 工程内，USART2 驱动）
 
@@ -371,30 +388,33 @@ void jump_to_app(uint32_t app_addr) {
 
 ```c
 void app_heartbeat_task(void) {
-    if (ota_param.ota_flag == OTA_FLAG_PENDING) {
+    /* 只有"跑在 pending_slot 里的那个 APP"才有权固化；旧固件不能替新镜像背书 */
+    if (APP_SLOT_BASE != SLOT_ADDR(ota_param.active_slot)) return;
+
+    if (ota_param.ota_flag == OTA_PENDING) {
         if (mqtt_publish_heartbeat() == OK) {
             ota_param.heartbeats_ok++;
-            if (ota_param.heartbeats_ok >= 18) {  /* 3分钟 */
-                ota_param.ota_flag = OTA_FLAG_OK;
-                flash_write_param(&ota_param);    /* 固化，不再回滚 */
+            if (ota_param.heartbeats_ok >= 18) {   /* 3 分钟 */
+                ota_param.ota_flag = OTA_OK;
+                flash_write_param(&ota_param);     /* 固化，不再回滚 */
             }
         } else if (now() - boot_time > 180000) {
-            ota_param.ota_flag = OTA_FLAG_OK;
-            ota_param.active_slot = !ota_param.active_slot; /* 切回旧槽 */
-            flash_write_param(&ota_param);
+            /* 超时：不自己切槽，交给 BootLoader 的 boot_attempt 计数去回滚 */
             NVIC_SystemReset();
         }
     }
 }
 ```
 
-### 5.7 ESP-01S 接 USART2 对接要点（新增，对应你"要重分配串口"）
+> **为什么不在 APP 里切槽回滚**：APP 一旦自己改 `active_slot`，BootLoader 就分不清"这是新固件确认失败"还是"用户手动切槽"了。让 BootLoader 独占 `active_slot` 的写入权，回滚逻辑只有一处，才好验证。
+
+### 5.7 ESP-01S 接 USART2 对接要点（已落地，此处为核对清单）
 
 - **硬件**：ESP-01S 的 TX/RX 接 STM32 的 **USART2_RX(PA3) / USART2_TX(PA2)**（交叉接，ESP TX→PA3，ESP RX→PA2）。ESP-01S 3.3V 供电，注意电流（峰值 ~300mA）单板 LDO 要够。
-- **CubeMX**：启用 USART2，模式 Asynchronous，波特率 **115200**（和 ESP-01S AT 默认一致；你 VOFA 那次是忘了在 PC 端改波特率，ESP AT 这边初始就设 115200 即可）。开 RX 的 **DMA + 空闲中断**（仿 `Doc/BSP.md` 里 USART1 的写法）。
-- **DMA 流避让**：USART2_RX 选 `DMA1_Stream5`（或 DMA2 任一空闲流），**不要**用 Stream2/3（SPI1/W25Q64）和 Stream4（USART1_RX）。`.ioc` 里确认无冲突。
-  - ⚠️ 现状：`usart.c` 仅 `hdma_usart1_rx`，USART2 暂无 DMA。若沿用 §2.1/§2.2 的中断接收范式则无需改此步；若改 DMA 范式须先在 `.ioc` 补配后重生成。
-- **协议**：AT 指令走 USART2 轮询/中断收发；MQTT 连接、订阅 `/sys/{pk}/{dn}/thing/ota/firmware/get`、发布进度到 `/thing/ota/update`，全部沿用你已验证的阿里云对接代码，只是把底层串口从"之前的 ESP8266 接线"换到 USART2。
+- **CubeMX**：USART2 = Asynchronous，**115200**（与 ESP-01S AT 默认一致；`Core/Src/usart.c` 已确认）。
+- **DMA 流避让**：⚠️ **当前未配 DMA 也不要紧**——`esp01s.c` 已用 `HAL_UARTEx_ReceiveToIdle_IT` 中断接收落地，OTA 无需为此改动（92KB 在 115200bps 约 6.6s，串口不是瓶颈）。若日后确需 DMA，USART2_RX 要选空闲流（`DMA1_Stream5/6` 或 DMA2），避让 `Stream2/3`（SPI1/W25Q64）与 `Stream4`（USART1_RX），在 `.ioc` 补配后重生成。
+  > ⚠️ 排查波特率请以 `Core/Src/usart.c` 实际值为准，不要信头文件里的宏（历史教训：ESP01S_UART_BAUD 曾写成 921600 的陈旧值）。
+- **协议**：AT 指令走 USART2 收发；MQTT 连接、订阅 `/sys/{pk}/{dn}/thing/ota/firmware/get`、发布进度到 `/thing/ota/update`，全部沿用已验证的阿里云对接代码。
 - **调试**：先用串口助手单独给 ESP-01S 发 `AT`、`AT+GMR`、`AT+MQTTUSERCFG?` 确认固件与 MQTT 可用，再接到 STM32 USART2。
 
 ---
@@ -409,7 +429,8 @@ void app_heartbeat_task(void) {
 - 漏 `SCB->VTOR = app_addr` → APP 一进中断就飞。BootLoader 跳之前设一次，**APP 工程 `system_stm32h7xx.c` 也要设对应 offset**。两处都要。
 
 ### ⚠️ 易错 3：Flash 扇区没按边界对齐
-- H743 是 128KB/扇区。APP 起始地址必须落扇区起点（0x08040000、0x080C0000），自定义 `.sct` 的 `ROM_START` 必须改，否则跑飞。
+- H743 是 128KB/扇区。APP 起始地址必须落扇区起点（**`0x08040000` / `0x08100000`**），自定义 `.sct` 的 `ROM_START` 必须改，否则跑飞。
+  - 顺带：**这两个地址同时也是两个 Bank 的"扇区对齐点"**——`0x08040000` = Bank1 的 Sector 2，`0x08100000` = Bank2 的 Sector 0。别用全局扇区号去推地址（易错 14）。
 
 ### ⚠️ 易错 4：CRC32 算法两端不一致
 - 云端与 STM32 端 CRC32（多项式 `0xEDB88320`、初始 `0xFFFFFFFF`、结果取反）必须完全一致，否则永远校验失败。先用已知文件在 PC 和 STM32 对拍。
@@ -419,7 +440,10 @@ void app_heartbeat_task(void) {
 - 本方案**不做断点续传**（92KB 全包重下约 7s，比维护 offset 状态简单得多）：掉电/断网后 `FLAG` 仍是 `UPDATE`，重启后 APP **重新擦除、整包重下**。⚠️ 千万别"只重下不重擦"——Flash 只能 1→0，写过的位置未擦除不能改写。
 
 ### ⚠️ 易错 6：回滚条件设计反了
-- 错误：新 APP 启动失败但 `active_slot` 已切到新槽 → 重启又跳坏的。正确：PENDING 阶段**先不固化**，心跳成功（≥3分钟）才 `FLAG=OK`；失败则把 `active_slot` 切回旧值再复位。
+- 错误：新 APP 启动失败但 `active_slot` 已切到新槽 → 重启又跳坏的。正确：`PENDING` 阶段**先不固化**，心跳成功（≥3 分钟）才 `FLAG=OK`；失败由 **BootLoader** 的 `boot_attempt` 计数把 `active_slot` 切回旧值再复位。
+- ⚠️ **两条子坑**：
+  - **别让 APP 自己切槽回滚**（旧版 §5.6 就这么写）。`active_slot` 的写入权归 **BootLoader 独占**，否则 BootLoader 分不清"新固件确认失败"和"正常切槽"，回滚就有两处真相源。
+  - **别只在"CRC 失败"分支计 `boot_attempt`**。新固件"能过 CRC 但起不来"时，若每次重进 `PENDING` 都把计数清零，**回滚永远不会触发**——必须在"`active_slot` 已等于 `pending_slot`"这一支单独计数（见 §4 步骤 6 第二行）。
 
 ### ⚠️ 易错 7：阿里云 OTA topic 拼错
 - 订阅：`/sys/{pk}/{dn}/thing/ota/update`（上报进度）、`/sys/{pk}/{dn}/thing/ota/firmware/get`（拉 URL）。pk/dn 三元组填错收不到指令。你做过阿里云对接，复用老配置。
@@ -429,25 +453,84 @@ void app_heartbeat_task(void) {
 
 ### ⚠️ 易错 9（新增）：新开 USART2 的 DMA 流与 W25Q64/SPI1、USART1 冲突
 - SPI1 占 DMA1 Stream2/3，USART1_RX 占 DMA1 Stream4。USART2_RX 必须选空闲流（如 DMA1 Stream5 / DMA2），否则编译期或运行期 DMA 互踩。配完在 `.ioc` 核对 DMA 请求映射。
-  - ⚠️ 现状：`usart.c` 仅 `hdma_usart1_rx`，USART2 当前**无 DMA 句柄**；§2.1/§2.2 已用中断接收落地。此条仅在校验"§2.3 真要走 DMA"时才相关。
+  - ⚠️ 现状：`usart.c` 仅 `hdma_usart1_rx`，USART2 当前**无 DMA 句柄**；驱动已用中断接收落地。此条仅在"真要走 DMA"时才相关——**OTA 不需要为此补 DMA**（见 §2）。
+
+### ⚠️ 易错 10：一份 bin 不能两槽通用（绝对地址）
+- 镜像里的函数指针、`const` 数据表、以及**向量表中的复位向量**都是链接期定死的绝对地址。把 APP1 的 bin（基址 `0x08040000`）烧进 APP2（`0x08100000`），CPU 从 APP2 取到的复位向量仍指向 `0x0804xxxx` → **跳回 APP1 执行旧固件**，现象是"OTA 明明成功却还在跑老版本"。
+- 解法：**两个 Keil target**（`APP_SLOT1` / `APP_SLOT2`），差异只有 `.sct` 的 `ROM_START` 与 `VECT_TAB_OFFSET`；云端按设备上报的 `next_slot` 下发对应那份，BootLoader/APP 再用易错 11 的自检把"发错槽"挡在门外。
+- 想只出一份产物只有两条路：**ROPI/RWPI**（`-ropi -rwpi`，HAL/CMSIS/FreeRTOS 支持度差、性能损失大）或 **Bank Swap**（`SWAP_BANK` option byte，两镜像都按 `0x08000000` 链接、靠翻转 Bank 映射切槽——代价是两槽各占满 1MB、BootLoader 无处安放、需改 option byte 且调试困难）。**本方案两条都不选**，双构建更简单也更可控。
+
+### ⚠️ 易错 11：镜像自检（零 header 开销）
+- 不必在镜像前面塞自定义头（那会和向量表打架，还得改 `.sct` 的 `+FIRST`）——**向量表前 8 字节本身就是天然自检信息**：
+
+```c
+int img_self_check(uint32_t base) {
+    uint32_t msp   = *(volatile uint32_t*)(base + 0);
+    uint32_t reset = *(volatile uint32_t*)(base + 4);
+    uint32_t msp_bank = msp & 0xFFF00000U;
+    if (msp_bank != 0x24000000U && msp_bank != 0x20000000U) return 0;  /* MSP 须落在 RAM */
+    if ((reset & 1U) == 0U)                                  return 0;  /* Thumb 位必须为 1 */
+    if (reset < base || reset >= base + APP_SLOT_SIZE)       return 0;  /* 必须落在本槽内 */
+    return 1;
+}
+```
+
+- 最后一条顺带就是"**这个镜像是不是为这个槽构建的**"判定：APP1 版的 `reset ∈ [0x08040000, 0x08100000)`，APP2 版 `∈ [0x08100000, 0x08180000)`，一眼可分，发错槽直接拒收。
+
+### ⚠️ 易错 12：擦写耗时 vs 4.1s 狗口（OTA 期间最常见的复位源）
+- H7 手册 Table 53 **单扇区（128KB）擦除**：并行度 x8 典型 2s / **最坏 4s**，x32 1.1s / 2.2s，**x64 典型 1s / 最坏 2s**；编程（32B flashword）x64 典型 100µs / 最坏 200µs。
+- 即：**擦一个扇区就可能吃掉半个到一个狗窗口**。规则：
+  - `VoltageRange` 用 `FLASH_VOLTAGE_RANGE_4`（x64，3.3V 供电允许）；
+  - **每个扇区擦完立即喂狗**，绝不能"连擦 6 个扇区再喂"；
+  - 编程循环每 4KB 喂一次；
+  - 只擦"装得下镜像"的扇区数（92KB → 1 个），别无脑擦满 768KB。
+- ⚠️ 社区真实案例：有人用 `VOLTAGE_RANGE_3` 擦 S7 直接复位，换 `RANGE_4` 才正常——就是狗口不够。**永远按最坏值设计，不要按典型值。**
+
+### ⚠️ 易错 13：写完回读 CRC 读到的是缓存旧行
+- H7 有 16KB D-Cache，且 Flash 区默认可缓存。刚 `HAL_FLASH_Program` 完就按地址读回来算 CRC，**很可能读到 cache 里的旧数据**，表现为"CRC 偶发不匹配"。
+- 回读前必须 `SCB_InvalidateDCache_by_Addr((void*)base, size);`（BootLoader 侧同样要做，见 §5.2）。更省事的做法：用 MPU 把该 Flash 区间配成 **Device / non-cacheable**。
+
+### ⚠️ 易错 14：`HAL_FLASHEx_Erase` 的 Banks / Sector 是"Bank 内编号"
+- H7 双 Bank，`FLASH_EraseInitTypeDef.Banks` 必须按目标地址落在哪个 Bank 填 `FLASH_BANK_1` / `FLASH_BANK_2`；填错会去擦"另一 Bank 同编号"的扇区。
+- 且 `Sector` 是 **Bank 内编号 0–7**，不是全局 S0–S15。`APP2` 起始 `0x08100000` 对应 **Bank2 的 Sector 0**，不是 Sector 8。这个换算极易出错——**旧版分区表算出 `0x080C0000` 的根源就在这儿**（把 896KB 当成 512KB 偏移去加）。
 
 ---
 
 ## 7. 落地步骤建议（循序渐进）
 
-1. **先在 `.ioc` 开 USART2（PA2/PA3）+ 空闲中断 DMA（避让流）**，单独写小程序用串口助手验证 ESP-01S AT/MQTT 能连阿里云。
-2. **单独写 BootLoader 工程**，只做「读 flag → 跳 APP1」，先在 Keil 切 `VECT_TAB_OFFSET` + 自定义 `.sct` 跑通双工程跳转（不加网络）。
-3. APP 工程链接地址改到 0x08040000，验证从 BootLoader 跳过去能正常跑（VOFA、推理都在）。
-4. APP 里实现「收 URL → HTTP 拉包 → 写 W25Q → CRC32」（ESP-01S 走 USART2）。
-5. BootLoader 增加「写 APP2 + 切槽 + 复位」。
-6. 加心跳回滚。
-7. 阿里云控制台发一次正式 OTA 包，端到端验证。
+> ⚠️ 步骤 1–2 需要新建 Keil 工程 / target 与 `.sct`，涉及 `.uvprojx`。按本项目约定**由你手动操作**（AI 不代改工程文件），我只出文档与 `.sct` 模板。
+
+1. **建 BootLoader 独立工程**（链接 `0x08000000`）：只做「起狗 → 读参数 → 校验栈顶 → 跳 APP1」，**先不碰网络**。
+2. **APP 工程拆两个 target**：`APP_SLOT1`（`0x08040000` / `VECT_TAB_OFFSET=0x40000`）、`APP_SLOT2`（`0x08100000` / `0x100000`）；用 `-D APP_SLOT_BASE=` 同时驱动 `.sct` 与宏（避免两处手填不同步）。跑通「BootLoader → APP1」跳转，确认 VOFA、推理、串口控制台都正常。
+   - 此步**不做 OTA**：只验证双工程共存与 VTOR。
+3. **BootLoader 加参数区与回滚**：`ota_param_t` 读写、`PENDING` 分支的 CRC 重算 + `boot_attempt` 回滚、镜像自检（易错 11）。可用烧录器手动把镜像写进 APP2、手动置 `PENDING`，单独验证"切槽 + 回滚"这条链路。
+4. **APP 侧实现下载与边下边烧**：订阅 OTA topic → 按 `!active_slot` 选构件 → HTTP 分包 → 边收边烧 → 自检 + CRC → 置 `PENDING` 复位（§5.3）。**USART2 已就绪，本步不用再配串口/DMA**。
+5. **看门狗联调**（§10）：BootLoader 裸轮询喂狗 + 跳转前最后喂一次 + APP 早期初始化的狗口预算。验收方式：**故意在擦写循环里去掉喂狗，确认狗真的会咬**——不验证过就不知道它到底有没有生效。
+6. **心跳固化**：新 APP 3 分钟内 MQTT 心跳 → 写 `FLAG = OK`；再验"掐断心跳 → 3 次后自动回滚"。
+7. 端到端：阿里云控制台发一次正式 OTA 包；再补一次**"发错槽的镜像必须被拒收"**的负向验证（易错 11）。
 
 ---
 
 ## 8. 与本项目现状态的衔接
 
-- 现有代码**无 BootLoader、无 Flash 分区、无联网模组接入 APP**（ESP-01S 待接 USART2），OTA 是「从零加」，不是改一行。
+**已具备（不用重做）**
+
+| 项 | 状态 |
+|---|---|
+| ESP-01S 联网 | ✅ 已接 **USART2(PA2/PA3) 115200**，驱动 `Components/BSP/ESP/Src/esp01s.c` 落地（中断接收，无 DMA） |
+| 看门狗 | ✅ IWDG1 已启用（4.1s），2026-09-02 改为三阶段监管，见 §10 |
+| 崩溃黑匣子 / 磁标定 | ✅ W25Q64 已驱动，OTA 不碰 |
+| 日志/遥测/控制台 | ✅ USART1 921600（VOFA + 日志 + 串口控制台），可用于 OTA 调试 |
+
+**还没有（本方案要新增的）**
+
+| 项 | 现状 |
+|---|---|
+| BootLoader | ❌ 工程不存在 |
+| Flash 分区 / 分散加载 | ❌ `MDK-ARM/STM32H743VIT6.sct` 仍是**单镜像 `0x08000000` 2MB**，无 `VECT_TAB_OFFSET` |
+| 参数区 | ❌ 无 `ota_param_t` |
+| 槽容量压力 | ✅ 无。APP 实测 **92.28 KB**，768KB 槽装得下 8 倍 |
+
 - `StartInferenceTask` 只跑一次写 `g_Test_results`（`macro_precision=0.91128` 实测正常），**推理逻辑不用动**，它随 APP 整包进 APP1/APP2。
 - **两类模型权重**（Fault_Diagnosis INT8 + EdgeImpulse 球磨机检测）都编译进 APP 固件 `.rodata`，OTA 整包覆盖，不用单独处理球磨机参数。
 - **W25Q64 里的运行期参数**（磁标定、崩溃黑匣子）OTA 碰不到，自然保留。
@@ -462,14 +545,76 @@ void app_heartbeat_task(void) {
 
 理由：
 1. **OTA 升级的是"整个 APP 固件"**。球磨机检测模型（EdgeImpulse 权重 + `ei_run_classifier`）是 APP 固件的一部分（§0.3/§3）。如果先做完 OTA、再往 APP 里塞球磨机检测，等于**第一次正式 OTA 就要带着球磨机检测一起发**——这反而最简单，因为 OTA 框架只需搭一次，后续模型迭代都走 OTA。
-2. **但 BootLoader 双分区对 APP 体积有硬约束**：APP1/APP2 各 896KB。你现在 Fault_Diagnosis(~64KB 权重) + FreeRTOS + 驱动已占一部分；球磨机检测（96×96 输入、tensor_arena）会再吃掉几十~一百多 KB Flash + 大量 RAM（tensor_arena 在 RAM，不占 Flash）。**建议先把球磨机检测编译进 APP，量一次 `.map` 的 ROM/RAM 占用**，确认 896KB 槽装得下、RAM（尤其 D-TCM/AXI SRAM 总量）够，再定 BootLoader 的槽大小——避免"OTA 做好了发现 APP 塞不进槽"返工。
+2. **但 BootLoader 双分区对 APP 体积有硬约束**：APP1/APP2 各 **768KB**。当前基线已实测：Total ROM **94,492 B（92.28 KB）**、RW+ZI **77,480 B（75.66 KB）**——距 768KB 槽还有 **8 倍余量**。球磨机检测（96×96 输入、tensor_arena）预计再加几十~一百多 KB Flash（tensor_arena 在 RAM，不占 Flash），**槽位基本不构成约束**；真正要盯的是 **RAM**（H743 共 1MB：DTCM 128KB / AXI 512KB / SRAM1-3 / SRAM4）。
+   - ⚠️ 但**体积会变**：每次合入大模块后请重新看一眼 `.map` 的 `Total ROM Size`，槽大小以实测为准，别拿老数字做假设。
 3. **实操顺序推荐**：
-   - 阶段 A（现在）：把球磨机检测集成进当前 APP（0x08000000 单镜像），跑通推理，`armlink` 出 `.map` 记录 ROM/RAM 峰值。
-   - 阶段 B：依据阶段 A 的体量，定 BootLoader + 双 APP 槽大小（必要时 APP 槽从 896KB 调，或确认 896KB 够），搭 BootLoader 跳转（§7 步骤 2-3）。
-   - 阶段 C：接 USART2 + ESP-01S，做下载/校验/回滚（§7 步骤 4-7）。
+   - 阶段 A（现在）：把球磨机检测集成进当前 APP（仍是 `0x08000000` 单镜像），跑通推理，出 `.map` 记录 ROM/RAM 峰值。
+   - 阶段 B：按阶段 A 的体量确认槽大小（预期 768KB 绰绰有余），搭 BootLoader + 双 target 跳转（§7 步骤 1-3）。
+   - 阶段 C：APP 侧做下载/边下边烧/校验/回滚（§7 步骤 4-6）。**USART2 + ESP-01S 已就绪，此步无需再动串口**。
    - 阶段 D：把"带球磨机检测的最终 APP"作为第一个正式 OTA 包发出去，验证端到端。
 4. **不建议**：先花大力气把 OTA 完全做绝（含回滚全验证）却用一个"不含球磨机检测"的 APP 去验，因为最终 OTA 必然要带球磨机检测，早带早验、少返工。也不建议把球磨机检测"做到 100% 完美"才碰 OTA——两者解耦，OTA 框架搭好后，模型迭代本就是 OTA 的用武之地。
 
 ---
 
+## 10. 看门狗：跨 BootLoader / APP 的统一方案
+
+IWDG 是 OTA 的**最后一道防线**（新固件起不来 → 复位 → `boot_attempt++` → 回滚）。但它是**全局共享、启动后硬件上关不掉**的资源（"Once enabled, the IWDG cannot be disabled except by a reset"），跨阶段交接时最容易漏。
+
+### 10.1 APP 侧：三阶段监管（已落地，2026-09-02）
+
+| 阶段 | 监管方式 |
+|---|---|
+| ① 上电 → POST 开始 | **不启动 IWDG**（外设初始化 / `Motor_App_Init` / `Attitude_Init` / 起调度器：耗时不可控且无喂狗点） |
+| ② POST 期间 | `IWDG_Start()` 起跑；各 `Xxx_Test` 用 `log_wdt_feed()` 协作喂（真卡死仍被抓） |
+| ③ POST 收尾 | `watchdog_arm()` → TIM7 心跳接管：被监视任务须持续 `task_heartbeat_kick()` 才喂 |
+
+总闸 `APP_ENABLE_WATCHDOG`（`app_config.h`，当前 = **1**）。`log_wdt_feed()` 已改为**运行期判定**（狗没启动就 no-op），消除"以为在喂其实没跑"的错觉。
+
+> 历史教训：此前 IWDG 在上电早期就启动，把"耗时不可控且无喂狗点"的启动窗口纳入监管 → **复位环**。改三阶段后根治。
+
+### 10.2 BootLoader 侧：裸轮询喂狗
+
+BootLoader 是裸机，没有 FreeRTOS / TIM7 心跳体系，不能照搬 APP 那套。规则：
+
+- `bootloader_run()` 第一行 `IWDG_Start()`；
+- 喂狗点：**每个扇区擦/写后一次**、每次 `flash_write_param()` 前后各一次、末尾 `for(;;)` 里持续喂；
+- `crc32_flash()` 整包校验时**每 64KB 喂一次**，别等算完；
+- **`jump_to_app()` 之前喂最后一次**，把完整的 4.1s 窗口交给 APP。
+
+### 10.3 跨阶段交接：这里有个必堵的洞
+
+⚠️ IWDG 启动后硬件上停不下来。BootLoader 起狗后跳进 APP，APP"阶段①不监管"的假设就**不成立了**——狗已经在跑，`SystemClock_Config` / `HAL_Init` / 各模块 Init 全在狗口之下。
+
+但**这个洞必须留着**，不能靠"BootLoader 不起狗"回避：新固件若在早期初始化就挂死（还没走到 POST），没有狗就永远不复位、`boot_attempt` 永远不递增、**回滚机制形同虚设** → 真砖。
+
+约定：
+
+1. BootLoader 跳转前喂最后一次，给 APP 一个完整窗口；
+2. APP 的 `IWDG_Start()` 若见 `IWDG_IsRunning()` 为真，**只刷新、不重复初始化**；
+3. **APP 早期初始化预算 < 4.1s**。若日后加入慢初始化（如大块 `const` 拷贝），要么在步骤之间插 `log_wdt_feed()`，要么把它挪到 `IWDG_Start()` 之后（POST 有协作喂狗保护）；
+4. `NVIC_SystemReset()` 是系统复位，**IWDG 会随之关闭**（"只能靠复位关闭"），所以 §4 步骤 5 的软复位会给 BootLoader 一个**干净的无狗起点**，由它重新 `IWDG_Start()`。
+   ⚠️ 前提是你没有在 option byte 里开**硬件看门狗**——开了的话 IWDG 不受系统复位影响，上板第一件事就是验证这个假设。
+5. **DATA 点**：离线回归 `offline_regression.py` 的 **T4** 会校验"被监视任务都有 kick 点"。OTA 若新增任务并纳入监视集合，改完跑一遍 T4（该闸门已做过负向验证，不是假闸门）。
+
+---
+
+## 11. 与 Route C 架构的接口约定（预留）
+
+> Route C = 集中式 `state_repo`（共享状态）+ pub-sub 事件总线（动作通知）+ SPSC ring buffer（高频采样），是本项目正在推进的架构升级目标。**OTA 文档写于其之前**，此处补上接缝约定，避免两边各自落地时撞车。
+
+| 关注点 | 约定 |
+|---|---|
+| `ota_param_t` 是否并入 `state_repo` | ❌ **不并入**。参数区在 Flash(S1)、**掉电持久**；`state_repo` 是 RAM 中的运行时状态。`state_repo` 只存**镜像**（`ota.state` / `ota.progress`），落盘仍走 `flash_write_param()` 单一出口 |
+| 事件总线 | 状态迁移发事件：`EVT_OTA_UPDATE_REQ` / `EVT_OTA_PROGRESS` / `EVT_OTA_VERIFIED` / `EVT_OTA_ROLLBACK`。各任务**订阅后自行让路** |
+| 升级期 ring buffer | 边下边烧期间**不停采样**（RWW 保证不 stall），但 `INFERENCE` 任务应**暂停推理**——别同时抢 Flash 带宽与算力。由 `EVT_OTA_UPDATE_REQ` 通知 |
+| 遥测（VOFA） | 升级期间**降频或停发** firewater 帧，把 USART1 让给日志；进度走 MQTT 上报，两队不挤 |
+| 心跳 | OTA 期间 `task_heartbeat_kick()` **必须照常**——否则 TIM7 判心跳过期 → 不喂狗 → 复位，把一次正常升级打断成回滚 |
+| logger / 黑匣子 | 升级失败写 `last_error` 的同时走 `LOG_FATAL` 出一条，便于事后与 W25Q 黑匣子对齐 |
+
+⚠️ **最易踩的一条**：OTA 下载/烧写通常跑在**新任务**里；该任务一旦加入被监视集合（如 `HB_OTA`），就必须在循环里 `task_heartbeat_kick(HB_OTA)`，否则一进下载就复位。新增被监视任务后，跑一遍 `offline_regression.py`（T4 会兜住）。
+
+---
+
 *归档：本方案为 `AI_deploy` 项目 OTA 设计稿（含代码区/RW-ZI 划分、双 APP 与 EdgeImpulse 参数对应、ESP-01S 接 USART2 方案、球磨机检测时序建议），配套 `h7_flash_layout.svg`、`bootloader_flow.svg`。故障与误判归 `Components/Debug/Error/Error_Readme_idx.md`。*
+
+> ✅ **配套的两张 SVG 已按 §3 同步更新**：`h7_flash_layout.svg` 现分区为 APP1=`S2–S7 @0x08040000`、APP2=`S8–S13 @0x08100000`（各 768KB，Bank 对齐），W25Q64 已移除 OTA 缓冲标注；`bootloader_flow.svg` 已改为"跳 APP、由 APP 下载 + BootLoader 仅判定/校验/切槽"。图与本文档一致。

@@ -1,12 +1,11 @@
 /*
- * app_config.h (Components/Debug/Inc) — L1 功能包含门控（编译期）
- * 决定"哪些模块编进固件 / 哪些 FreeRTOS 任务被创建"。
+ * app_config.h (Components/Debug/Inc) — L1 功能包含门控（编译期）：决定哪些模块编进固件 / 哪些任务被创建。
  * 三层正交：本文件=L1 功能(APP_ENABLE_X 未定义=0 -> 模块不编、任务不建)；
- *           logger.h=L2 级别(LOG_COMPILE_MAX_LEVEL/LOG_RUNTIME_DEFAULT_LEVEL)；
+ *           logger.h=L2 级别(LOG_COMPILE_MAX_LEVEL / LOG_RUNTIME_DEFAULT_LEVEL)；
  *           dbg_config.h=L3 文本(DBG_LOG_<TASK>=0 -> 模块跑但静音)。
- * 用户接口：顶部 #define 一个 APP_PROFILE_* 即选"目标+上游依赖+LOGGER"；不选=默认全功能。
- *           APP_ENABLE_X 是 profile 派生宏，勿手动 #define(需未覆盖组合就新建 APP_PROFILE_*)。
- *           未定义即 0（#if 按 0 安全）；Logger 常驻核心，每 profile 与默认全功能均含。
+ * 用法：顶部 #define 一个 APP_PROFILE_* 即选"目标+上游依赖+LOGGER"；不选=默认全功能。
+ *       APP_ENABLE_X 是 profile 派生宏，勿手动 #define（需未覆盖组合就新建 APP_PROFILE_*）。
+ *       未定义即 0（#if 按 0 安全）；Logger 常驻核心，每 profile 与默认全功能均含。
  */
 #ifndef APP_CONFIG_H
 #define APP_CONFIG_H
@@ -22,10 +21,9 @@
 //#define APP_PROFILE_OBJDET_INFERENCE
 #define APP_PROFILE_MOTOR
 //#define APP_PROFILE_NETWORK
-/* 预设组（可多选，取并集）；自动开 目标+上游依赖+LOGGER。
- * 依赖: ESP32S3 由 ObjDet/Network 引入(推理镜像跑在 ESP32-S3 侧 FOMO)；
- *       Sensor 由 Motor/Screen/Diag/ObjDet 引入；DIAG_INFERENCE 仅带 H743 侧 INT8 模型；
- *       OBJDET_INFERENCE 仅带 ESP32-S3 侧目标检测；Logger 被所有依赖。 */
+/* 预设组（可多选，取并集）= 目标 + 上游依赖 + LOGGER。
+ * 依赖：ESP32S3 由 ObjDet/Network 引入（FOMO 跑在 ESP32-S3 侧）；Sensor 由 Motor/Screen/Diag/ObjDet 引入；
+ *       DIAG_INFERENCE = H743 侧 INT8 模型；OBJDET_INFERENCE = ESP32-S3 侧 FOMO；Logger 被所有依赖。 */
 #ifdef APP_PROFILE_SENSOR
   #define APP_ENABLE_SENSOR  1
   #define APP_ENABLE_LOGGER  1
@@ -69,9 +67,9 @@
   #define APP_ENABLE_LOGGER  1
   /* 其余 7 个业务 APP_ENABLE_X 保持未定义=0：模块整段不编、任务空跑，仅 Logger 干活 */
 #endif
-/* 看门狗总闸：1=生效（POST 开始起跑 IWDG ≈4.1s；POST 收尾后 TIM7 按任务心跳喂，冻结即复位）；
- *             0=调试关狗（IWDG_Start() 空操作，log_wdt_feed()/TIM7 喂狗全 no-op，真实故障留串口便于定位）。
- * 关狗只影响"是否复位"——心跳探针 task_heartbeat_kick 照常记录，可离线查谁在偷懒。可用 Keil Define 覆盖。 */
+/* 看门狗总闸：1=生效（POST 起跑 IWDG≈4.1s，收尾后 TIM7 按任务心跳喂，冻结即复位）；
+ *             0=调试关狗（IWDG_Start() 与喂狗全 no-op，真实故障留串口）。
+ * 关狗只影响"是否复位"——心跳探针 task_heartbeat_kick 照常记录，可离线查谁偷懒。可用 Keil Define 覆盖。 */
 #ifndef APP_ENABLE_WATCHDOG
   #define APP_ENABLE_WATCHDOG  1
 #endif
