@@ -197,3 +197,6 @@ app/build/
 local.properties
 *.iml
 .cxx/
+
+# 非源码且体积过大：Kotlin 编译器 jar（59MB，IDE 误置于 src 目录下）
+Doc/aliyun_mqtt_demo/app/src/kotlin-compiler.jar

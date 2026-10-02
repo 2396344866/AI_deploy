@@ -1,0 +1,731 @@
+<?xml version="1.0" encoding="utf-8"?>
+<androidx.constraintlayout.widget.ConstraintLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:id="@+id/main"
+    android:background="@drawable/ic_launcher_background"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    tools:context=".MQTT_ALYActivity">
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        app:layout_constraintTop_toTopOf="parent"
+        app:layout_constraintBottom_toBottomOf="parent"
+        tools:ignore="MissingConstraints">
+        <TextView
+            android:id="@+id/textview_mqtt_interface_find_username"
+            android:layout_width="200dp"
+            android:layout_height="30dp"
+            android:layout_marginTop="10dp"
+            android:layout_gravity="center"
+            android:ellipsize="end"
+            android:gravity="center"
+            android:marqueeRepeatLimit="marquee_forever"
+            android:maxEms="10"
+            android:maxLines="1"
+            android:singleLine="true"
+            android:text="@string/please_measure_information"
+            android:textColor="@color/black"
+            android:textIsSelectable="true"
+            android:textSize="18sp"
+            tools:ignore="TextSizeCheck" />
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:baselineAligned="false"
+            android:orientation="horizontal"
+            android:layout_marginTop="10dp">
+
+            <LinearLayout
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:orientation="vertical"
+                android:background="@drawable/card_background"
+                android:layout_marginStart="8dp"
+                android:layout_marginEnd="4dp"
+                android:padding="12dp">
+
+                <TextView
+                    android:id="@+id/textview_mqtt_interface_temp_label"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="@string/temperature"
+                    android:textSize="14sp"
+                    android:textColor="#757575"/>
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="horizontal"
+                    android:layout_marginTop="8dp"
+                    android:gravity="center_vertical">
+
+                    <ImageView
+                        android:id="@+id/imageview_mqtt_interface_temp"
+                        android:layout_width="32dp"
+                        android:layout_height="32dp"
+                        android:src="@drawable/ic_temp"
+                        android:contentDescription="@string/temperature" />
+
+                    <TextView
+                        android:id="@+id/textview_mqtt_interface_temp_show"
+                        android:layout_width="0dp"
+                        android:layout_weight="0.5"
+                        android:layout_height="match_parent"
+                        android:layout_gravity="center"
+                        android:gravity="center"
+                        android:importantForAutofill="no"
+                        android:maxLines="1"
+                        android:padding="5dp"
+                        android:textColor="@color/black"
+                        android:textColorHint="#004D40"
+                        android:textSize="16sp"
+                        tools:ignore="VisualLintTextFieldSize,TextContrastCheck" />
+                    <TextView
+                        android:id="@+id/textview_mqtt_interface_temp_unit"
+                        android:layout_width="0dp"
+                        android:layout_weight="0.5"
+                        android:layout_height="match_parent"
+                        android:text="@string/temp_unit"
+                        android:layout_gravity="center"
+                        android:gravity="center"
+                        android:importantForAutofill="no"
+                        android:maxLines="1"
+                        android:padding="5dp"
+                        android:textColor="@color/black"
+                        android:textColorHint="#004D40"
+                        android:textSize="16sp"
+                        tools:ignore="VisualLintTextFieldSize,TextContrastCheck" />
+
+                </LinearLayout>
+            </LinearLayout>
+
+            <LinearLayout
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:orientation="vertical"
+                android:background="@drawable/card_background"
+                android:layout_marginStart="4dp"
+                android:layout_marginEnd="8dp"
+                android:padding="12dp">
+
+                <TextView
+                    android:id="@+id/textview_mqtt_interface_hum_label"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="@string/humidity"
+                    android:textSize="14sp"
+                    android:textColor="#757575"/>
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="horizontal"
+                    android:layout_marginTop="8dp"
+                    android:gravity="center_vertical">
+
+                    <ImageView
+                        android:id="@+id/imageview_mqtt_interface_hum"
+                        android:layout_width="32dp"
+                        android:layout_height="32dp"
+                        android:src="@drawable/ic_humidity"
+                        android:contentDescription="@string/humidity" />
+                    <TextView
+                        android:id="@+id/textview_mqtt_interface_hum_show"
+                        android:layout_width="0dp"
+                        android:layout_weight="0.5"
+                        android:layout_height="match_parent"
+                        android:layout_gravity="center"
+                        android:gravity="center"
+                        android:importantForAutofill="no"
+                        android:maxLines="1"
+                        android:padding="5dp"
+                        android:textColor="@color/black"
+                        android:textColorHint="#004D40"
+                        android:textSize="16sp"
+                        tools:ignore="VisualLintTextFieldSize,TextContrastCheck" />
+
+                    <TextView
+                        android:id="@+id/textview_mqtt_interface_hum_unit"
+                        android:layout_width="0dp"
+                        android:layout_weight="0.5"
+                        android:layout_height="match_parent"
+                        android:layout_gravity="center"
+                        android:gravity="center"
+                        android:text="@string/humi_unit"
+                        android:importantForAutofill="no"
+                        android:maxLines="1"
+                        android:padding="5dp"
+                        android:textColor="@color/black"
+                        android:textColorHint="#004D40"
+                        android:textSize="16sp"
+                        tools:ignore="VisualLintTextFieldSize,TextContrastCheck" />
+
+                </LinearLayout>
+            </LinearLayout>
+        </LinearLayout>
+
+
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:baselineAligned="false"
+            android:orientation="horizontal"
+            android:layout_marginTop="10dp">
+
+            <!-- Light Intensity Card -->
+            <LinearLayout
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:orientation="vertical"
+                android:background="@drawable/card_background"
+                android:layout_marginStart="8dp"
+                android:layout_marginEnd="4dp"
+                android:padding="12dp">
+
+
+                <TextView
+                    android:id="@+id/textview_mqtt_interface_Light_intensity"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="@string/Light_intensity"
+                    android:textSize="14sp"
+                    android:textColor="#757575"/>
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="horizontal"
+                    android:layout_marginTop="8dp"
+                    android:gravity="center_vertical">
+
+                    <ImageView
+                        android:id="@+id/imageview_mqtt_interface_light_intensity"
+                        android:layout_width="32dp"
+                        android:layout_height="32dp"
+                        android:src="@drawable/ic_light_indensity"
+                        android:contentDescription="@string/Light_intensity" />
+
+                    <TextView
+                        android:id="@+id/textview_mqtt_interface_Light_intensity_show"
+                        android:layout_width="0dp"
+                        android:layout_weight="0.5"
+                        android:layout_height="match_parent"
+                        android:layout_gravity="center"
+                        android:gravity="center"
+                        android:importantForAutofill="no"
+                        android:maxLines="1"
+                        android:padding="5dp"
+                        android:textColor="@color/black"
+                        android:textColorHint="#004D40"
+                        android:textSize="16sp"
+                        tools:ignore="VisualLintTextFieldSize,TextContrastCheck" />
+                    <TextView
+                        android:id="@+id/textview_mqtt_interface_Light_intensity_uint"
+                        android:layout_width="0dp"
+                        android:layout_weight="0.5"
+                        android:layout_height="match_parent"
+                        android:gravity="center"
+                        android:text="@string/Light_intensity_unit"
+                        android:layout_gravity="center"
+                        android:textColor="@color/black"
+                        android:textSize="18sp"
+                        android:maxEms="10"
+                        android:maxLines="1"
+                        android:ellipsize="end"
+                        android:marqueeRepeatLimit="marquee_forever"
+                        android:singleLine="true"
+                        android:textIsSelectable="true"
+                        tools:ignore="TextSizeCheck"
+                        />
+                </LinearLayout>
+            </LinearLayout>
+            <LinearLayout
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:orientation="vertical"
+                android:background="@drawable/card_background"
+                android:layout_marginStart="8dp"
+                android:layout_marginEnd="4dp"
+                android:padding="12dp">
+
+
+                <TextView
+                    android:id="@+id/textview_mqtt_interface_smoke_density_label"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+
+                    android:text="@string/smoke_density"
+                    android:textSize="14sp"
+                    android:textColor="#757575"/>
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="horizontal"
+                    android:layout_marginTop="8dp"
+                    android:gravity="center_vertical">
+
+                    <ImageView
+                        android:id="@+id/imageview_mqtt_interface_smoke_density"
+                        android:layout_width="32dp"
+                        android:layout_height="32dp"
+                        android:src="@drawable/ic_smoke_density"
+                        android:contentDescription="@string/Light_intensity" />
+                    <TextView
+                        android:id="@+id/textview_mqtt_interface_smoke_density_show"
+                        android:layout_width="0dp"
+                        android:layout_weight="0.5"
+                        android:layout_height="match_parent"
+                        android:layout_gravity="center"
+                        android:gravity="center"
+                        android:importantForAutofill="no"
+                        android:maxLines="1"
+                        android:padding="5dp"
+                        android:textColor="@color/black"
+                        android:textColorHint="#004D40"
+                        android:textSize="16sp"
+                        tools:ignore="VisualLintTextFieldSize,TextContrastCheck" />
+                    <TextView
+                        android:id="@+id/textview_mqtt_interface_smoke_density_uint"
+                        android:layout_width="0dp"
+                        android:layout_weight="0.5"
+                        android:layout_height="match_parent"
+                        android:gravity="center"
+                        android:text="@string/smoke_density_unit"
+                        android:layout_gravity="center"
+                        android:textColor="@color/black"
+                        android:textSize="18sp"
+                        android:maxEms="10"
+                        android:maxLines="1"
+                        android:ellipsize="end"
+                        android:marqueeRepeatLimit="marquee_forever"
+                        android:singleLine="true"
+                        android:textIsSelectable="true"
+                        tools:ignore="TextSizeCheck"
+                        />
+                </LinearLayout>
+            </LinearLayout>
+        </LinearLayout>
+
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:layout_marginTop="10dp"
+            android:gravity="center"
+            tools:ignore="UselessParent">
+
+
+            <LinearLayout
+                android:layout_width="180dp"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:background="@drawable/card_background"
+                android:layout_marginStart="8dp"
+                android:layout_marginEnd="8dp"
+                android:padding="12dp">
+                <TextView
+                    android:id="@+id/textview_mqtt_interface_ultrasound_distance"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="@string/ultrasound_distance"
+                    android:textSize="14sp"
+                    android:textColor="#757575"/>
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="horizontal"
+                    android:layout_marginTop="8dp"
+                    android:gravity="center_vertical">
+
+                    <ImageView
+                        android:id="@+id/imageview_mqtt_interface_ultrasound_distance"
+                        android:layout_width="32dp"
+                        android:layout_height="32dp"
+                        android:src="@drawable/ic_ultrasound_distance"
+                        android:contentDescription="@string/ultrasound_distance"/>
+
+                    <TextView
+                        android:id="@+id/textview_mqtt_interface_ultrasound_distance_show"
+                        android:layout_width="0dp"
+                        android:layout_weight="0.5"
+                        android:layout_height="match_parent"
+                        android:layout_gravity="center"
+                        android:gravity="center"
+                        android:textSize="16sp"
+                        android:textColor="@color/black"
+                        android:maxLines="1"/>
+
+                    <TextView
+                        android:id="@+id/textview_mqtt_interface_ultrasound_distance_unit"
+                        android:layout_width="0dp"
+                        android:layout_weight="0.5"
+                        android:layout_height="match_parent"
+                        android:gravity="center"
+                        android:text="@string/ultrasound_distance_unit"
+                        android:textSize="16sp"
+                        android:textColor="@color/black"/>
+                </LinearLayout>
+
+            </LinearLayout>
+
+            <!-- 水流卡片 -->
+<!--            <LinearLayout-->
+<!--                android:layout_width="0dp"-->
+<!--                android:layout_height="wrap_content"-->
+<!--                android:layout_weight="1"-->
+<!--                android:orientation="vertical"-->
+<!--                android:background="@drawable/card_background"-->
+<!--                android:layout_marginStart="4dp"-->
+<!--                android:layout_marginEnd="8dp"-->
+<!--                android:padding="12dp">-->
+
+<!--                <TextView-->
+<!--                    android:id="@+id/textview_mqtt_interface_water_flow_label"-->
+<!--                    android:layout_width="wrap_content"-->
+<!--                    android:layout_height="wrap_content"-->
+<!--                    android:text="@string/water_flow"-->
+<!--                    android:textSize="14sp"-->
+<!--                    android:textColor="#757575"/>-->
+
+<!--                <LinearLayout-->
+<!--                    android:layout_width="match_parent"-->
+<!--                    android:layout_height="wrap_content"-->
+<!--                    android:orientation="horizontal"-->
+<!--                    android:layout_marginTop="8dp"-->
+<!--                    android:gravity="center_vertical">-->
+
+<!--                    <ImageView-->
+<!--                        android:id="@+id/imageview_mqtt_Water_Flow"-->
+<!--                        android:layout_width="32dp"-->
+<!--                        android:layout_height="32dp"-->
+<!--                        android:src="@drawable/ic_water_flow"-->
+<!--                        android:contentDescription="@string/water_flow" />-->
+
+<!--                    <TextView-->
+<!--                        android:id="@+id/textview_mqtt_interface_Water_Flow_show"-->
+<!--                        android:layout_width="0dp"-->
+<!--                        android:layout_height="match_parent"-->
+<!--                        android:layout_gravity="center"-->
+<!--                        android:layout_weight="0.5"-->
+<!--                        android:gravity="center"-->
+<!--                        android:maxLines="1"-->
+<!--                        android:textColor="@color/black"-->
+<!--                        android:textSize="16sp" />-->
+
+<!--                    <TextView-->
+<!--                        android:id="@+id/textview_mqtt_interface_Water_Flow_uint"-->
+<!--                        android:layout_width="0dp"-->
+<!--                        android:layout_weight="0.5"-->
+<!--                        android:layout_height="match_parent"-->
+<!--                        android:gravity="center"-->
+<!--                        android:text="@string/water_flow_unit"-->
+<!--                        android:textSize="16sp"-->
+<!--                        android:textColor="@color/black"/>-->
+<!--                </LinearLayout>-->
+<!--            </LinearLayout>-->
+        </LinearLayout>
+
+
+<!--        <LinearLayout-->
+<!--            android:layout_width="match_parent"-->
+<!--            android:layout_height="wrap_content"-->
+<!--            android:orientation="horizontal"-->
+<!--            android:layout_marginTop="10dp"-->
+<!--            tools:ignore="UselessParent">-->
+
+<!--            <LinearLayout-->
+<!--                android:layout_width="0dp"-->
+<!--                android:layout_height="wrap_content"-->
+<!--                android:layout_weight="1"-->
+<!--                android:orientation="vertical"-->
+<!--                android:background="@drawable/card_background"-->
+<!--                android:layout_marginStart="8dp"-->
+<!--                android:layout_marginEnd="4dp"-->
+<!--                android:padding="12dp">-->
+
+<!--                <TextView-->
+<!--                    android:id="@+id/textview_mqtt_interface_pressure_label"-->
+<!--                    android:layout_width="wrap_content"-->
+<!--                    android:layout_height="wrap_content"-->
+<!--                    android:text="@string/Pressure"-->
+<!--                    android:textSize="14sp"-->
+<!--                    android:textColor="#757575"/>-->
+
+<!--                <LinearLayout-->
+<!--                    android:layout_width="match_parent"-->
+<!--                    android:layout_height="wrap_content"-->
+<!--                    android:orientation="horizontal"-->
+<!--                    android:layout_marginTop="8dp"-->
+<!--                    android:gravity="center_vertical">-->
+
+
+<!--                    <ImageView-->
+<!--                        android:id="@+id/imageview_mqtt_interface_Pressure"-->
+<!--                        android:layout_width="32dp"-->
+<!--                        android:layout_height="32dp"-->
+<!--                        android:src="@drawable/ic_pressure"-->
+<!--                        android:contentDescription="@string/Light_intensity" />-->
+
+<!--                    <TextView-->
+<!--                        android:id="@+id/textview_mqtt_interface_Pressure_show"-->
+<!--                        android:layout_width="0dp"-->
+<!--                        android:layout_weight="0.5"-->
+<!--                        android:layout_height="match_parent"-->
+<!--                        android:layout_gravity="center"-->
+<!--                        android:gravity="center"-->
+<!--                        android:textSize="16sp"-->
+<!--                        android:textColor="@color/black"-->
+<!--                        android:maxLines="1"/>-->
+
+<!--                    <TextView-->
+<!--                        android:id="@+id/textview_mqtt_interface_Pressure_uint"-->
+<!--                        android:layout_width="0dp"-->
+<!--                        android:layout_weight="0.5"-->
+<!--                        android:layout_height="match_parent"-->
+<!--                        android:gravity="center"-->
+<!--                        android:text="@string/Pressure_unit"-->
+<!--                        android:textSize="16sp"-->
+<!--                        android:textColor="@color/black"/>-->
+<!--                </LinearLayout>-->
+<!--            </LinearLayout>-->
+
+<!--            &lt;!&ndash; LED卡片（修改后） &ndash;&gt;-->
+<!--            <LinearLayout-->
+<!--                android:layout_width="0dp"-->
+<!--                android:layout_height="wrap_content"-->
+<!--                android:layout_weight="1"-->
+<!--                android:orientation="vertical"-->
+<!--                android:background="@drawable/card_background"-->
+<!--                android:layout_marginStart="4dp"-->
+<!--                android:layout_marginEnd="8dp"-->
+<!--                android:padding="12dp">-->
+
+<!--                <TextView-->
+<!--                    android:id="@+id/textview_mqtt_interface_LED_label"-->
+<!--                    android:layout_width="wrap_content"-->
+<!--                    android:layout_height="wrap_content"-->
+<!--                    android:text="@string/LED_status"-->
+<!--                    android:textSize="14sp"-->
+<!--                    android:textColor="#757575"/>-->
+
+<!--                <LinearLayout-->
+<!--                    android:layout_width="match_parent"-->
+<!--                    android:layout_height="wrap_content"-->
+<!--                    android:orientation="horizontal"-->
+<!--                    android:layout_marginTop="8dp"-->
+<!--                    android:gravity="center_vertical">-->
+
+<!--                    <ImageView-->
+<!--                        android:id="@+id/imageview_mqtt_interface_LED"-->
+<!--                        android:layout_width="32dp"-->
+<!--                        android:layout_height="32dp"-->
+<!--                        android:src="@drawable/ic_led"-->
+<!--                        android:contentDescription="@string/LED_status"/>-->
+
+<!--                    <TextView-->
+<!--                        android:id="@+id/textview_mqtt_interface_LED_status"-->
+<!--                        android:layout_width="0dp"-->
+<!--                        android:layout_weight="1"-->
+<!--                        android:layout_height="match_parent"-->
+<!--                        android:layout_gravity="center"-->
+<!--                        android:gravity="center"-->
+<!--                        android:textSize="16sp"-->
+<!--                        android:textColor="@color/black"-->
+<!--                        android:maxLines="1"/>-->
+<!--                </LinearLayout>-->
+<!--            </LinearLayout>-->
+<!--        </LinearLayout>-->
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:layout_marginTop="10dp"
+            android:baselineAligned="false">
+
+            <LinearLayout
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:orientation="vertical"
+                android:background="@drawable/card_background"
+                android:layout_marginStart="8dp"
+                android:layout_marginEnd="2dp"
+                android:padding="8dp">
+                <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Roll(翻滚)" android:textSize="12sp" android:textColor="#757575"/>
+                <TextView android:id="@+id/textview_mqtt_interface_roll_show" android:layout_width="match_parent" android:layout_height="wrap_content" android:gravity="center" android:textColor="@color/black" android:textSize="16sp" android:layout_marginTop="8dp"/>
+            </LinearLayout>
+
+            <LinearLayout
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:orientation="vertical"
+                android:background="@drawable/card_background"
+                android:layout_marginStart="2dp"
+                android:layout_marginEnd="2dp"
+                android:padding="8dp">
+                <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Pitch(俯仰)" android:textSize="12sp" android:textColor="#757575"/>
+                <TextView android:id="@+id/textview_mqtt_interface_pitch_show" android:layout_width="match_parent" android:layout_height="wrap_content" android:gravity="center" android:textColor="@color/black" android:textSize="16sp" android:layout_marginTop="8dp"/>
+            </LinearLayout>
+
+            <LinearLayout
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:orientation="vertical"
+                android:background="@drawable/card_background"
+                android:layout_marginStart="2dp"
+                android:layout_marginEnd="8dp"
+                android:padding="8dp">
+                <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Yaw(偏航)" android:textSize="12sp" android:textColor="#757575"/>
+                <TextView android:id="@+id/textview_mqtt_interface_yaw_show" android:layout_width="match_parent" android:layout_height="wrap_content" android:gravity="center" android:textColor="@color/black" android:textSize="16sp" android:layout_marginTop="8dp"/>
+            </LinearLayout>
+        </LinearLayout>
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="40dp"
+            android:orientation="horizontal"
+            tools:ignore="UselessParent"
+            android:layout_marginTop="10dp">
+            <Button
+                android:id="@+id/button_mqtt_interface_button_on"
+                style="?android:attr/buttonBarButtonStyle"
+                android:layout_height="match_parent"
+                android:layout_width="0dp"
+                android:layout_weight="0.5"
+                android:padding="5dp"
+                android:text="@string/on"
+                android:textColor="#7B1FA2"
+                tools:ignore="MissingPrefix,VisualLintButtonSize" />
+            <Button
+                android:id="@+id/button_mqtt_interface_button_off"
+                style="?android:attr/buttonBarButtonStyle"
+                android:layout_width="0dp"
+                android:layout_weight="0.5"
+                android:layout_height="match_parent"
+                android:padding="5dp"
+                android:text="@string/off"
+                android:textColor="#7B1FA2"
+                tools:ignore="MissingPrefix,VisualLintButtonSize" />
+        </LinearLayout>
+
+
+
+
+        <LinearLayout
+            android:orientation="horizontal"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:padding="5dp"
+            tools:ignore="UselessParent"
+            android:layout_marginTop="10dp">
+            <Button
+                android:id="@+id/button_mqtt_interface_forward"
+                style="?android:attr/buttonBarButtonStyle"
+                android:layout_width="0dp"
+                android:layout_weight="0.5"
+                android:layout_height="wrap_content"
+                android:padding="5dp"
+                android:text="@string/forward"
+                android:textColor="#7B1FA2"
+                android:textSize="16sp"
+                tools:ignore="MissingPrefix,VisualLintButtonSize" />
+            <Button
+                android:id="@+id/button_mqtt_interface_back"
+                style="?android:attr/buttonBarButtonStyle"
+                android:layout_width="0dp"
+                android:layout_weight="0.5"
+                android:layout_height="wrap_content"
+                android:padding="5dp"
+                android:text="@string/back"
+                android:textColor="#7B1FA2"
+                android:textSize="16sp"
+                tools:ignore="MissingPrefix,VisualLintButtonSize" />
+        </LinearLayout>
+        <LinearLayout
+            android:orientation="horizontal"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:padding="5dp"
+            tools:ignore="UselessParent"
+            android:layout_marginTop="10dp">
+            <Button
+                android:id="@+id/button_mqtt_interface_left"
+                style="?android:attr/buttonBarButtonStyle"
+                android:layout_width="0dp"
+                android:layout_weight="0.5"
+                android:layout_height="wrap_content"
+                android:padding="5dp"
+                android:text="@string/left"
+                android:textColor="#7B1FA2"
+                android:textSize="16sp"
+                tools:ignore="MissingPrefix,VisualLintButtonSize" />
+            <Button
+                android:id="@+id/button_mqtt_interface_right"
+                style="?android:attr/buttonBarButtonStyle"
+                android:layout_width="0dp"
+                android:layout_weight="0.5"
+                android:layout_height="wrap_content"
+                android:padding="5dp"
+                android:text="@string/right"
+                android:textColor="#7B1FA2"
+                android:textSize="16sp"
+                tools:ignore="MissingPrefix,VisualLintButtonSize" />
+        </LinearLayout>
+        <LinearLayout
+            android:orientation="horizontal"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:padding="5dp"
+            tools:ignore="UselessParent"
+            android:layout_marginTop="10dp">
+            <Button
+                android:id="@+id/button_mqtt_interface_rotate_left"
+                style="?android:attr/buttonBarButtonStyle"
+                android:layout_width="0dp"
+                android:layout_weight="0.5"
+                android:layout_height="wrap_content"
+                android:padding="5dp"
+                android:text="@string/left_rotate"
+                android:textColor="#7B1FA2"
+                android:textSize="16sp"
+                tools:ignore="MissingPrefix,VisualLintButtonSize" />
+            <Button
+                android:id="@+id/button_mqtt_interface_rotate_right"
+                style="?android:attr/buttonBarButtonStyle"
+                android:layout_width="0dp"
+                android:layout_weight="0.5"
+                android:layout_height="wrap_content"
+                android:padding="5dp"
+                android:text="@string/right_rotate"
+                android:textColor="#7B1FA2"
+                android:textSize="16sp"
+                tools:ignore="MissingPrefix,VisualLintButtonSize" />
+
+        </LinearLayout>
+        <Button
+            android:id="@+id/button_mqtt_interface_stop"
+            style="?android:attr/buttonBarButtonStyle"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:padding="5dp"
+            android:text="@string/stop"
+            android:textColor="#7B1FA2"
+            android:textSize="16sp"
+            tools:ignore="MissingPrefix,VisualLintButtonSize" />
+
+    </LinearLayout>
+</androidx.constraintlayout.widget.ConstraintLayout>

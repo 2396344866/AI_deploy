@@ -1,0 +1,7 @@
+# 复制本文件为 local.properties，填入真实值后使用。
+# local.properties 已在 .gitignore 中，不会被提交；本 example 文件可安全入库。
+#
+# 阿里云 IoT 一机一密三元组（控制台：设备管理 > 设备 > 查看 DeviceSecret）
+productKey=请填写ProductKey
+deviceName=请填写DeviceName
+deviceSecret=请填写DeviceSecret
