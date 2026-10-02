@@ -22,7 +22,9 @@
 
 ### 2.1 结构与精度（PC 预校验，1605 样本，对齐 PyTorch 94.70%）
 - 结构：input10 → H0(50) → Z_final(150) → 4 类；FC1 5000 MAC / FC2 600 MAC。
-- 权重 7700 floats ≈ 30.1 KB，放 `.dtcmram`（零等待、CPU 专用）。
+- 权重 7700 floats ≈ 30.1 KB（`const`，随固件编译进内部 Flash `.rodata`，与 §1 一致）。
+  > ⚠ 源码中权重以 `__attribute__((section(".dtcmram")))` 命名，但当前 `.sct`（Keil 默认分散加载，见 `MDK-ARM/STM32H743VIT6.sct`）**未对该段做任何映射**，段名不生效、**实际并未落在 DTCM**。
+  > 若确需钉入 DTCM（0x2000_0000，零等待、CPU 专用），须在 `.sct` 的 `RW_IRAM1` 中显式加入 `*(.dtcmram)`，并确认启动拷贝（RO 段放 RAM 需由 load region 提供初值）。
 - 加速：gamma LUT 替 powf / 预计算 inv_sigma / CMSIS-DSP f32 算子。
 
 | 方案 | 精度 |

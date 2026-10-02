@@ -189,3 +189,11 @@ temp/
 
 # Node（若含前端 / 工具脚本）
 node_modules/
+
+# ===================== Android 参考工程构建产物 =====================
+.gradle/
+.idea/
+app/build/
+local.properties
+*.iml
+.cxx/

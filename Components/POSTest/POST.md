@@ -127,7 +127,7 @@
 
 ### POST-TC-03　含 INFERENCE 自检（正常值）
 
-- **[宏]** `app_config.h`：`#define APP_ENABLE_INFERENCE 1`（模型已加载至 `Components/Fault_Diagnosis/` / `.dtcmram`）。
+- **[宏]** `app_config.h`：`#define APP_ENABLE_INFERENCE 1`（模型权重随固件编入 `Components/Fault_Diagnosis/`，落内部 Flash `.rodata`）。
 - **[Keil]** 确认 `Fault_Diagnosis` 源组与 tensor arena 配置就位 → Rebuild(0E/0W) → Download。
 - **[连]** 同上；ML 自检约 **130s**，期间观察串口持续推进、无饿死。
 - **[发]** 上电复位。

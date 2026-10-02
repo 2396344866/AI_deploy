@@ -30,7 +30,7 @@ MDK-ARM/          Keil 工程（BSP/Logger/Motor/AI 分组）
 
 ## 模型与推理（代码事实）
 - 结构：input10 → H0(50) → Z_final(150) → 4 类；FC1 5000MAC / FC2 600MAC
-- 权重 7700 floats ≈ 30.1KB @ .dtcmram（零等待、CPU 专用）
+- 权重 7700 floats ≈ 30.1KB（`const` → 内部 Flash `.rodata`；源码段名为 `.dtcmram`，但 `.sct` 未映射该段，**实际不在 DTCM**）
 - 加速：gamma LUT 替 powf / 预计算 inv_sigma / CMSIS-DSP f32 算子
 - 精度（PC 预校验, 1605 样本, 对齐 PyTorch 94.70%）：
   `f32 94.70% | HYBRID 90.97% | FC1f32+FC2i8 91.59% | FC1i8+FC2i8 90.03% | FULL_INT8 88.72%`
